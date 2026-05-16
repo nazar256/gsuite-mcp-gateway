@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+.dev.vars
+wrangler.toml
+dist/
+coverage/
+*.log
+.tmp/
+CONTINUE.md

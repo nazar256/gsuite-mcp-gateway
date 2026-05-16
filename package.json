@@ -1,0 +1,32 @@
+{
+  "name": "gsuite-mcp-gateway",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Cloudflare Worker MCP/OAuth gateway for Google Calendar and Gmail",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke:local": "tsx scripts/smoke-local.ts",
+    "smoke:remote": "tsx scripts/smoke-remote.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "jose": "^6.2.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@cloudflare/workers-types": "^4.20260509.0",
+    "tsx": "^4.20.6",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5",
+    "wrangler": "^4.90.0"
+  }
+}
