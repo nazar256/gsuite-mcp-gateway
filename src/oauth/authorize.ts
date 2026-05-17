@@ -12,6 +12,14 @@ import type { AuthorizationStatePayload } from './types';
 
 const DEMO_GRANT_NAMESPACE = 'demo';
 const DEMO_CLIENT_ID = 'self-hosted-demo';
+const AUTHORIZATION_UPGRADES = [
+  { key: 'calendar.write', label: 'calendar.write', description: 'Create, update, and delete Google Calendar events requested by the user' },
+  { key: 'drive.write', label: 'drive.write', description: 'List, create, rename, move, upload, and delete Google Drive files and folders' },
+  { key: 'gmail.send', label: 'gmail.send', description: 'Send email via Gmail' },
+  { key: 'gmail.modify', label: 'gmail.modify', description: 'Read and organize Gmail messages and labels' },
+  { key: 'gmail.drafts', label: 'gmail.drafts', description: 'Create Gmail drafts for review before sending' },
+  { key: 'offline_access', label: 'offline_access', description: 'Allow refresh (server-side) so sessions can persist' },
+] as const;
 
 function validateGrantNamespace(clientId: string, redirectUri: string, grantNamespace?: string): string | undefined {
   const isReviewerDemoClient = clientId === DEMO_CLIENT_ID && redirectUri.endsWith('/demo/oauth/callback');
@@ -48,7 +56,7 @@ function htmlResponse(body: string, status = 200): Response {
     headers: {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
-      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://accounts.google.com; base-uri 'none'; frame-ancestors 'none'",
       'referrer-policy': 'no-referrer',
       'x-content-type-options': 'nosniff',
     },
@@ -61,17 +69,12 @@ function renderConsentPage(config: AppConfig, request: ReturnType<typeof parseAu
   const googleScopeList = googleScopes.map((scope) => `<li><code>${htmlEscape(scope)}</code></li>`).join('');
 
   const requestedSet = new Set(request.scope.split(' ').filter(Boolean));
-  const upgradeOptions: Array<{ key: string; label: string; description: string }> = [
-    { key: 'calendar.write', label: 'calendar.write', description: 'Create, update, and delete Google Calendar events requested by the user' },
-    { key: 'gmail.send', label: 'gmail.send', description: 'Send email via Gmail' },
-    { key: 'gmail.drafts', label: 'gmail.drafts', description: 'Create Gmail drafts for review before sending' },
-    { key: 'offline_access', label: 'offline_access', description: 'Allow refresh (server-side) so sessions can persist' },
-  ].filter((opt) => !requestedSet.has(opt.key));
+  const upgradeOptions = AUTHORIZATION_UPGRADES.filter((opt) => !requestedSet.has(opt.key));
 
   const upgradeList = upgradeOptions.length
     ? `<fieldset style="margin: 1rem 0; padding: 0.75rem 1rem;">
         <legend><strong>Optional upgrades</strong></legend>
-        <p style="margin-top: 0; color: #444;">You can opt in to additional MCP scopes only when the client already requested them. No new scopes beyond the client request will be granted here.</p>
+        <p style="margin-top: 0; color: #444;">You can opt in to additional MCP scopes for this grant so the client can use more of the gateway's Google Workspace tools.</p>
         ${upgradeOptions.map((opt) => `
           <label style="display: block; margin: 0.5rem 0;">
             <input type="checkbox" name="upgrade_scope" value="${htmlEscape(opt.key)}" />
@@ -162,13 +165,12 @@ async function parsePostFields(request: Request): Promise<URLSearchParams> {
 
 export async function handleAuthorizePost(request: Request, config: AppConfig, db: DbLike): Promise<Response> {
   const fields = await parsePostFields(request);
-  // The consent page may only select from the client-requested scopes; it must not widen them.
   const baseScope = fields.get('scope') ?? '';
   const normalizedBaseScope = normalizeMcpScope(baseScope);
-  const requestedScopeSet = new Set(normalizedBaseScope.split(' ').filter(Boolean));
+  const allowedUpgradeScopes = new Set<string>(AUTHORIZATION_UPGRADES.map((opt) => opt.key));
   const upgrades = fields
     .getAll('upgrade_scope')
-    .filter((value) => typeof value === 'string' && requestedScopeSet.has(value));
+    .filter((value) => typeof value === 'string' && allowedUpgradeScopes.has(value));
   const desiredScope = normalizeMcpScope([normalizedBaseScope, ...upgrades].join(' ').trim());
   if (desiredScope !== fields.get('scope')) {
     fields.set('scope', desiredScope);

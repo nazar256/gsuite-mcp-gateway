@@ -2,14 +2,29 @@ import type { AppConfig, SupportedMcpScope } from '../config';
 import { HttpError } from '../security/errors';
 
 export const GOOGLE_SCOPE_BY_MCP_SCOPE: Record<Exclude<SupportedMcpScope, 'offline_access' | 'calendar.write'> | 'calendar.write.owned' | 'calendar.write.all', string[]> = {
+  'calendar.read': [
+    'https://www.googleapis.com/auth/calendar.readonly',
+  ],
   'calendar.write.owned': [
     'https://www.googleapis.com/auth/calendar.events.owned',
   ],
   'calendar.write.all': [
     'https://www.googleapis.com/auth/calendar.events',
   ],
+  'drive.read': [
+    'https://www.googleapis.com/auth/drive.readonly',
+  ],
+  'drive.write': [
+    'https://www.googleapis.com/auth/drive',
+  ],
+  'gmail.read': [
+    'https://www.googleapis.com/auth/gmail.readonly',
+  ],
   'gmail.send': [
     'https://www.googleapis.com/auth/gmail.send',
+  ],
+  'gmail.modify': [
+    'https://www.googleapis.com/auth/gmail.modify',
   ],
   'gmail.drafts': [
     'https://www.googleapis.com/auth/gmail.compose',
@@ -17,15 +32,70 @@ export const GOOGLE_SCOPE_BY_MCP_SCOPE: Record<Exclude<SupportedMcpScope, 'offli
 };
 
 const canonicalScopeOrder: SupportedMcpScope[] = [
+  'calendar.read',
   'calendar.write',
+  'drive.read',
+  'drive.write',
+  'gmail.read',
   'gmail.send',
+  'gmail.modify',
   'gmail.drafts',
   'offline_access',
 ];
 
 const BASE_GOOGLE_IDENTITY_SCOPES = ['openid', 'email', 'profile'] as const;
-const IMPLIED_MCP_SCOPES: Partial<Record<SupportedMcpScope, SupportedMcpScope[]>> = {};
-const GOOGLE_SCOPE_SUPERSETS: Record<string, string[]> = {};
+const IMPLIED_MCP_SCOPES: Partial<Record<SupportedMcpScope, SupportedMcpScope[]>> = {
+  'drive.write': ['drive.read'],
+  'gmail.modify': ['gmail.read'],
+};
+const DEFAULT_MCP_SCOPE = canonicalScopeOrder.join(' ');
+const GOOGLE_SCOPE_SUPERSETS: Record<string, string[]> = {
+  'https://www.googleapis.com/auth/calendar.readonly': [
+    'https://www.googleapis.com/auth/calendar',
+  ],
+  'https://www.googleapis.com/auth/calendar.events': [
+    'https://www.googleapis.com/auth/calendar',
+  ],
+  'https://www.googleapis.com/auth/calendar.events.owned': [
+    'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/calendar',
+  ],
+  'https://www.googleapis.com/auth/drive.readonly': [
+    'https://www.googleapis.com/auth/drive',
+  ],
+  'https://www.googleapis.com/auth/gmail.readonly': [
+    'https://www.googleapis.com/auth/gmail.modify',
+  ],
+  'https://www.googleapis.com/auth/gmail.send': [
+    'https://www.googleapis.com/auth/gmail.compose',
+    'https://www.googleapis.com/auth/gmail.modify',
+  ],
+  'https://www.googleapis.com/auth/gmail.compose': [
+    'https://www.googleapis.com/auth/gmail.modify',
+  ],
+};
+
+function getDirectGoogleScopesForMcpScope(config: AppConfig, scope: SupportedMcpScope): string[] {
+  if (scope === 'offline_access') {
+    return [];
+  }
+
+  const mappingKey = scope === 'calendar.write'
+    ? `calendar.write.${config.googleCalendarWriteScopeMode}` as const
+    : scope;
+
+  return GOOGLE_SCOPE_BY_MCP_SCOPE[mappingKey];
+}
+
+function isMcpScopeRedundant(scope: SupportedMcpScope, requested: Set<SupportedMcpScope>): boolean {
+  for (const [candidate, impliedScopes] of Object.entries(IMPLIED_MCP_SCOPES) as Array<[SupportedMcpScope, SupportedMcpScope[]]>) {
+    if (candidate !== scope && requested.has(candidate) && impliedScopes.includes(scope)) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 function hasGrantedGoogleScope(granted: Set<string>, requiredScope: string): boolean {
   if (granted.has(requiredScope)) {
@@ -37,7 +107,7 @@ function hasGrantedGoogleScope(granted: Set<string>, requiredScope: string): boo
 
 export function normalizeMcpScope(scope?: string | null): string {
   if (!scope || !scope.trim()) {
-    return 'calendar.write';
+    return DEFAULT_MCP_SCOPE;
   }
 
   const requested = new Set(scope.split(/\s+/).filter(Boolean));
@@ -67,20 +137,25 @@ export function hasScope(scope: string | undefined, requiredScope: string): bool
   return normalizeMcpScope(scope).split(' ').includes(requiredScope);
 }
 
+export function normalizeGrantedMcpScope(scope?: string | null): string {
+  if (!scope || !scope.trim()) {
+    return '';
+  }
+
+  return normalizeMcpScope(scope);
+}
+
 export function getRequiredGoogleScopes(config: AppConfig, mcpScope: string): string[] {
   const normalized = normalizeMcpScope(mcpScope).split(' ') as SupportedMcpScope[];
+  const requestedSet = new Set(normalized);
   const result = new Set<string>(BASE_GOOGLE_IDENTITY_SCOPES);
 
   for (const scope of normalized) {
-    if (scope === 'offline_access') {
+    if (isMcpScopeRedundant(scope, requestedSet)) {
       continue;
     }
 
-    const mappingKey = scope === 'calendar.write'
-      ? `calendar.write.${config.googleCalendarWriteScopeMode}` as const
-      : scope;
-
-    for (const googleScope of GOOGLE_SCOPE_BY_MCP_SCOPE[mappingKey]) {
+    for (const googleScope of getDirectGoogleScopesForMcpScope(config, scope)) {
       result.add(googleScope);
     }
   }
@@ -97,11 +172,15 @@ export function inferGrantedMcpScopes(config: AppConfig, googleScopes: string[])
       continue;
     }
 
-    const required = getRequiredGoogleScopes(config, candidate).filter((scope) => !BASE_GOOGLE_IDENTITY_SCOPES.includes(scope as typeof BASE_GOOGLE_IDENTITY_SCOPES[number]));
+    const required = getDirectGoogleScopesForMcpScope(config, candidate);
     if (required.every((scope) => hasGrantedGoogleScope(granted, scope))) {
       result.push(candidate);
     }
   }
 
-  return result;
+  if (result.length === 0) {
+    return result;
+  }
+
+  return normalizeMcpScope(result.join(' ')).split(' ');
 }

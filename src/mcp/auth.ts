@@ -12,7 +12,21 @@ export interface McpAuthContext {
   googleAccessToken: string;
 }
 
-export function unauthorizedResponse(config: AppConfig, scope = config.supportedScopes[0] ?? 'calendar.write'): Response {
+function getBearerTokenFromAuthorizationHeader(authorization: string | null): string | null {
+  if (!authorization) {
+    return null;
+  }
+
+  const [scheme, ...rest] = authorization.trim().split(/\s+/);
+  if (scheme?.toLowerCase() !== 'bearer' || rest.length === 0) {
+    return null;
+  }
+
+  const token = rest.join(' ').trim();
+  return token || null;
+}
+
+export function unauthorizedResponse(config: AppConfig, scope = config.supportedScopes.join(' '), wwwAuthenticate?: string): Response {
   return new Response(
     JSON.stringify({
       error: 'invalid_token',
@@ -23,20 +37,14 @@ export function unauthorizedResponse(config: AppConfig, scope = config.supported
       headers: {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
-        'www-authenticate': buildWwwAuthenticate(config, scope),
+        'www-authenticate': wwwAuthenticate ?? buildWwwAuthenticate(config, scope),
       },
     },
   );
 }
 
 export function parseBearerToken(request: Request): string | null {
-  const authorization = request.headers.get('authorization');
-  if (!authorization?.startsWith('Bearer ')) {
-    return null;
-  }
-
-  const token = authorization.slice('Bearer '.length).trim();
-  return token || null;
+  return getBearerTokenFromAuthorizationHeader(request.headers.get('authorization'));
 }
 
 export async function loadMcpAuthContext(request: Request, config: AppConfig, db: DbLike): Promise<McpAuthContext> {
@@ -52,7 +60,7 @@ export async function loadMcpAuthContext(request: Request, config: AppConfig, db
 
   return {
     accessTokenClaims,
-    grantedScope: accessTokenClaims.scope,
+    grantedScope: grant.granted_mcp_scopes,
     googleAccessToken: tokenSet.accessToken,
   };
 }

@@ -1,9 +1,28 @@
 {
   "name": "gsuite-mcp-gateway",
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "Cloudflare Worker MCP/OAuth gateway for Google Calendar and Gmail",
+  "description": "Self-hosted Cloudflare Worker MCP/OAuth gateway for Google Calendar, Gmail, and Google Drive",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nazar256/gsuite-mcp-gateway.git"
+  },
+  "homepage": "https://github.com/nazar256/gsuite-mcp-gateway",
+  "bugs": {
+    "url": "https://github.com/nazar256/gsuite-mcp-gateway/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "cloudflare-workers",
+    "oauth",
+    "google-calendar",
+    "gmail",
+    "google-drive",
+    "chatgpt"
+  ],
   "engines": {
     "node": ">=22"
   },

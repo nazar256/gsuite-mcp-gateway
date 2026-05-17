@@ -3,7 +3,7 @@ import { HttpError } from '../security/errors';
 import { getGrantById, revokeGrant, upsertGrant, type GrantRecord } from '../storage/grants';
 import type { DbLike } from '../storage/d1';
 import { expectGoogleJson } from './errors';
-import { inferGrantedMcpScopes } from '../oauth/scopes';
+import { inferGrantedMcpScopes, normalizeGrantedMcpScope } from '../oauth/scopes';
 import { decryptJson, encryptJson } from '../security/crypto';
 
 export interface GoogleTokenResponse {
@@ -200,7 +200,7 @@ export async function refreshGrantGoogleTokens(
         subject: grant.subject,
         kind: 'google_tokens',
       }),
-      grantedMcpScopes: grantedMcpScopes.join(' '),
+      grantedMcpScopes: normalizeGrantedMcpScope(grantedMcpScopes.join(' ')),
       grantedGoogleScopes: nextTokenSet.grantedGoogleScopes.join(' '),
     });
 

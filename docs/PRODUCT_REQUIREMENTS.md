@@ -1,6 +1,6 @@
 # Product Requirements
 
-`gsuite-mcp-gateway` is a self-hosted stateless Cloudflare Worker that exposes a remote MCP server over Streamable HTTP and brokers Google OAuth for Google Calendar, Gmail, and optional Google Drive access.
+`gsuite-mcp-gateway` is a self-hosted stateless Cloudflare Worker that exposes a remote MCP server over Streamable HTTP and brokers Google OAuth for Google Calendar, Gmail, and Google Drive access.
 
 Core requirements:
 
@@ -11,5 +11,5 @@ Core requirements:
 - OAuth Authorization Code + PKCE S256 for MCP clients, plus Google OAuth web server flow for Google APIs.
 - Default personal-use posture is self-hosted + Google app in **Testing** mode.
 - Default scopes should stay as narrow as practical for personal use.
-- Optional advanced Gmail/Drive scopes may be added by the operator when needed.
+- Broader advanced Gmail/Drive scopes may be added by the operator when needed.
 - Must be deployable and testable locally via `wrangler dev` and remotely on Cloudflare Workers.

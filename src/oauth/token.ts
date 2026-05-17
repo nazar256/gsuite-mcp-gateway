@@ -207,10 +207,12 @@ async function handleRefreshTokenGrant(fields: URLSearchParams, config: AppConfi
     throw new HttpError(400, 'invalid_grant', 'Grant is no longer active');
   }
 
+  const currentScope = grant.granted_mcp_scopes;
+
   const access = await issueAccessToken(config, {
     sub: claims.sub,
     client_id: clientId,
-    scope: claims.scope,
+    scope: currentScope,
     resource: claims.resource,
     grant_id: claims.grant_id,
   });
@@ -219,16 +221,16 @@ async function handleRefreshTokenGrant(fields: URLSearchParams, config: AppConfi
     access_token: access.token,
     token_type: 'Bearer',
     expires_in: access.expiresIn,
-    scope: claims.scope,
+    scope: currentScope,
   };
 
   const tokenSet = await decryptStoredGoogleTokenSet(config, grant);
-  if (tokenSet?.refreshToken && claims.scope.split(' ').includes('offline_access')) {
+  if (tokenSet?.refreshToken && currentScope.split(' ').includes('offline_access')) {
     response.refresh_token = await issueRefreshToken(config, {
       sub: claims.sub,
       client_id: clientId,
       grant_id: claims.grant_id,
-      scope: claims.scope,
+      scope: currentScope,
       resource: claims.resource,
     });
   }

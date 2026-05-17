@@ -27,8 +27,13 @@ export interface Env {
 }
 
 export const SUPPORTED_MCP_SCOPES = [
+  'calendar.read',
   'calendar.write',
+  'drive.read',
+  'drive.write',
+  'gmail.read',
   'gmail.send',
+  'gmail.modify',
   'gmail.drafts',
   'offline_access',
 ] as const;
@@ -74,8 +79,8 @@ const envSchema = z.object({
   MCP_RESOURCE: z.string().min(1),
   MCP_AUDIENCE: z.string().min(1),
   GOOGLE_CALLBACK_URL: z.string().min(1),
-  // Default to owned calendar writes for a narrower self-hosted setup.
-  GOOGLE_CALENDAR_WRITE_SCOPE_MODE: z.enum(['owned', 'all']).default('owned'),
+  // Default to full calendar write scope so shared-calendar event mutations work out of the box.
+  GOOGLE_CALENDAR_WRITE_SCOPE_MODE: z.enum(['owned', 'all']).default('all'),
   AUTH_STORAGE_MODE: z.literal('d1').default('d1'),
   DEFAULT_TIME_ZONE: z.string().min(1).default('Europe/Amsterdam'),
   ACCESS_TOKEN_TTL_SECONDS: z.string().default('3600'),

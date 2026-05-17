@@ -11,7 +11,8 @@ import { signJwt, verifyJwt } from './security/jwt';
 import { deleteGrant, getGrantBaseSubject, getGrantById, revokeGrant } from './storage/grants';
 import { getOAuthClient, upsertOAuthClient } from './storage/clients';
 
-const SUPPORT_EMAIL = 'contact the operator of this deployment';
+const PROJECT_REPO_URL = 'https://github.com/nazar256/gsuite-mcp-gateway';
+const PROJECT_ISSUES_URL = 'https://github.com/nazar256/gsuite-mcp-gateway/issues';
 const DEMO_CLIENT_ID = 'self-hosted-demo';
 const DEMO_CODE_VERIFIER = 'self-hosted-demo-pkce-verifier-string-1234567890ABCDE';
 const DEMO_COOKIE_NAME = 'gsmcp_demo';
@@ -232,7 +233,7 @@ function buildFlashRedirect(path: string, flash: string, headers?: HeadersInit):
 
 export function handleLandingPage(config: AppConfig): Response {
   return pageShell(config, 'gsuite-mcp-gateway', '/', `
-    <p><strong>gsuite-mcp-gateway</strong> is a self-hosted Cloudflare Worker MCP gateway for Google Calendar, Gmail, and optionally Drive.</p>
+    <p><strong>gsuite-mcp-gateway</strong> is a self-hosted Cloudflare Worker MCP gateway for Google Calendar, Gmail, and Google Drive.</p>
     <p>Each operator deploys their own Worker and configures their own Google OAuth application.</p>
     <p>The operator of this deployment controls the Google OAuth client, Cloudflare Worker, D1 database, and encrypted token storage.</p>
     <p><strong>Do not connect your Google account to a deployment unless you operate it or trust its operator.</strong></p>
@@ -242,10 +243,10 @@ export function handleLandingPage(config: AppConfig): Response {
       <li>adding attendees to calendar events and sending invitations;</li>
       <li>creating Gmail drafts;</li>
       <li>sending Gmail messages;</li>
-      <li>optionally creating or accessing Google Drive files explicitly requested by the user when Drive support is enabled by the operator.</li>
+      <li>creating or accessing Google Drive files explicitly requested by the user.</li>
     </ul>
     <p>The Worker stores Google OAuth tokens server-side in encrypted form and issues separate Worker-scoped tokens to MCP clients.</p>
-    <p>Support for this deployment is provided by its operator.</p>
+    <p>Support for this deployment is provided by its operator. Project source code and documentation are available on <a href="${PROJECT_REPO_URL}">GitHub</a>.</p>
     <p><a href="/privacy">/privacy</a> · <a href="/terms">/terms</a> · <a href="/support">/support</a> · <a href="/demo">/demo</a></p>
   `);
 }
@@ -253,13 +254,13 @@ export function handleLandingPage(config: AppConfig): Response {
 export function handlePrivacyPage(config: AppConfig): Response {
   return pageShell(config, 'Privacy policy', '/privacy', `
     <p>This open-source project is designed for self-hosting. Each deployment has its own operator. The operator is responsible for configuring Google OAuth, Cloudflare storage, retention, and access controls.</p>
-    <p>This deployment can connect a user’s Google account to an MCP-compatible client so the user can create calendar events, create Gmail drafts, send Gmail messages, and optionally create or access Google Drive files requested by the user.</p>
+    <p>This deployment can connect a user’s Google account to an MCP-compatible client so the user can create calendar events, create Gmail drafts, send Gmail messages, and create or access Google Drive files requested by the user.</p>
     <h2>What Google user data is accessed</h2>
     <ul>
       <li>OpenID Connect identity data needed to identify the connected account.</li>
       <li>Calendar event fields needed to create, update, or delete events requested by the user.</li>
       <li>Gmail draft and send payloads needed to create drafts and send user-requested messages.</li>
-      <li>Drive file metadata and file content only when the deployment operator enables Drive support and the user asks the connected client to create or access files.</li>
+      <li>Drive file metadata and file content when the user asks the connected client to create or access files.</li>
     </ul>
     <h2>Why it is accessed</h2>
     <p>The app accesses Google data only to perform actions explicitly requested by the user. This project is not intended as a shared hosted service by default.</p>
@@ -278,7 +279,7 @@ export function handlePrivacyPage(config: AppConfig): Response {
       <li>Operational logs are intended to avoid storing email bodies, Drive file contents, calendar descriptions, OAuth tokens, refresh tokens, and authorization headers.</li>
     </ul>
     <h2>Disconnect and deletion</h2>
-    <p>Use only deployments you operate or trust. The browser disconnect flow removes only the current local demo-session grant for this deployment. Operators can also delete stored grant rows from D1, and users can revoke the app from Google Account permissions.</p>
+    <p>Use only deployments you operate or trust. The browser disconnect flow removes the demo grant currently associated with this Google account for this deployment. Operators can also delete stored grant rows from D1, and users can revoke the app from Google Account permissions.</p>
     <p><strong>The app’s use and transfer of information received from Google APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements.</strong></p>
   `);
 }
@@ -288,9 +289,10 @@ export function handleTermsPage(config: AppConfig): Response {
     <p>gsuite-mcp-gateway is open-source self-hosted software. No central hosted service is provided by the project by default.</p>
     <p>By connecting a Google account to this deployment, you authorize this deployment’s operator configuration to access the Google services you approve during OAuth consent.</p>
     <p>You are responsible for commands and actions you ask an MCP client or the local smoke-test demo to perform.</p>
-    <p>Depending on the permissions granted, the app may create calendar events, create drafts, send emails, and optionally create or access Drive files only according to those permissions.</p>
+    <p>Depending on the permissions granted, the app may create calendar events, create drafts, send emails, and create or access Drive files only according to those permissions.</p>
     <p>The software and this deployment are provided without warranties of any kind.</p>
-    <p>For support, contact the operator of this deployment.</p>
+    <p>For deployment-specific support, contact the operator of this deployment.</p>
+    <p>For open-source project issues, see <a href="${PROJECT_ISSUES_URL}">the GitHub issue tracker</a>.</p>
     <p>See the <a href="/privacy">privacy policy</a> for data handling details.</p>
   `);
 }
@@ -298,14 +300,15 @@ export function handleTermsPage(config: AppConfig): Response {
 export function handleSupportPage(config: AppConfig): Response {
   return pageShell(config, 'Support and deletion', '/support', `
     <p>For self-hosted deployments, contact the operator of the deployment.</p>
+    <p>For bugs, docs fixes, or feature requests in the open-source project, use <a href="${PROJECT_ISSUES_URL}">GitHub issues</a>.</p>
     <h2>How to disconnect</h2>
     <ul>
-      <li>Use the disconnect button on <a href="/demo">/demo</a> to revoke the current local demo-session grant and delete the encrypted token record used only by that demo session.</li>
+      <li>Use the disconnect button on <a href="/demo">/demo</a> to revoke and delete the demo grant currently associated with this Google account for this deployment.</li>
       <li>You can also revoke the app from your Google Account permissions page.</li>
     </ul>
     <h2>How to request deletion</h2>
     <p>If you operate this deployment, you can delete stored grants from D1 directly. Otherwise, contact the operator of this deployment and request deletion of the stored grant and token record.</p>
-    <p>The browser disconnect flow removes the current demo-session grant only.</p>
+    <p>The browser disconnect flow removes the demo grant currently associated with this Google account for this deployment.</p>
   `);
 }
 
@@ -316,9 +319,10 @@ function renderDemoPage(config: AppConfig, status: DemoStatus, flash?: string): 
     <h2>Default Google scopes</h2>
     <ul>
       <li><code>openid email profile</code> — identify the connected account and show connection status.</li>
-      <li><code>https://www.googleapis.com/auth/calendar.events</code> or <code>calendar.events.owned</code> — create, update, and delete user-requested calendar events, depending on operator configuration.</li>
+      <li><code>https://www.googleapis.com/auth/calendar.events</code> — create, update, and delete user-requested calendar events, including shared calendars where the user has write access.</li>
       <li><code>https://www.googleapis.com/auth/gmail.send</code> — send email explicitly requested by the user.</li>
       <li><code>https://www.googleapis.com/auth/gmail.compose</code> — create Gmail drafts for user review.</li>
+      <li><code>https://www.googleapis.com/auth/drive</code> — browse, read, create, rename, move, and delete Drive files, folders, or shared-drive content explicitly requested by the user.</li>
     </ul>
     ${flash ? `<p style="padding:0.75rem 1rem; background:#eff6ff; border:1px solid #bfdbfe;">${htmlEscape(flash)}</p>` : ''}
     <h2>Current connection status</h2>
@@ -333,7 +337,7 @@ function renderDemoPage(config: AppConfig, status: DemoStatus, flash?: string): 
       <li>Click <strong>Connect Google account</strong>.</li>
       <li>Approve the requested scopes on Google’s consent screen using a test user allowed by your Google OAuth app.</li>
       <li>Return to this page and use the demo buttons below.</li>
-      <li>When finished, use disconnect to remove the stored local demo-session grant only.</li>
+      <li>When finished, use disconnect to remove the demo grant associated with this Google account for this deployment.</li>
     </ol>
     <p>
       <a href="/demo/connect" style="display:inline-block;padding:0.75rem 1rem;background:#2563eb;color:#fff;text-decoration:none;border-radius:0.5rem;">Connect Google account</a>
@@ -344,6 +348,8 @@ function renderDemoPage(config: AppConfig, status: DemoStatus, flash?: string): 
     <form method="post" action="/demo/actions/calendar/delete" style="margin-bottom:0.75rem;"><button type="submit">Delete test calendar event</button></form>
     <form method="post" action="/demo/actions/gmail/draft" style="margin-bottom:0.75rem;"><button type="submit">Create Gmail draft</button></form>
     <form method="post" action="/demo/actions/gmail/send" style="margin-bottom:0.75rem;"><button type="submit">Send test email to self</button></form>
+    <form method="post" action="/demo/actions/drive/create" style="margin-bottom:0.75rem;"><button type="submit">Create test Drive file</button></form>
+    <form method="post" action="/demo/actions/drive/delete" style="margin-bottom:0.75rem;"><button type="submit">Delete test Drive file</button></form>
     <form method="post" action="/account/disconnect"><button type="submit">Disconnect and delete stored tokens</button></form>
   `);
 }
@@ -367,7 +373,7 @@ export async function handleDemoConnect(config: AppConfig, db: DbLike): Promise<
   url.searchParams.set('code_challenge', codeChallenge);
   url.searchParams.set('code_challenge_method', 'S256');
   url.searchParams.set('resource', config.mcpResource);
-  url.searchParams.set('scope', 'calendar.write gmail.send gmail.drafts offline_access');
+  url.searchParams.set('scope', 'calendar.write drive.write gmail.send gmail.drafts offline_access');
   url.searchParams.set('grant_namespace', DEMO_GRANT_NAMESPACE);
   return redirectResponse(url.toString());
 }
@@ -491,6 +497,8 @@ export async function handleDemoAction(request: Request, config: AppConfig, db: 
     'calendar/delete': () => deleteCalendarEvent(request, config, db),
     'gmail/draft': () => createDraft(request, config, db),
     'gmail/send': () => sendEmail(request, config, db),
+    'drive/create': () => createDriveFile(request, config, db),
+    'drive/delete': () => deleteDriveFile(request, config, db),
   };
   const handler = handlers[action];
   if (!handler) {
@@ -557,11 +565,11 @@ export async function handleDemoAction(request: Request, config: AppConfig, db: 
 
 export async function handleAccountDisconnect(request: Request, config: AppConfig, db: DbLike): Promise<Response> {
   const grant = await getDemoGrant(request, config, db);
-  let flash = 'No current demo-session grant was connected in this browser.';
+  let flash = 'No demo grant was connected for this Google account on this deployment.';
   if (grant) {
     await revokeGrant(db, grant.grant_id);
     await deleteGrant(db, grant.grant_id);
-    flash = 'Disconnected and deleted the current demo-session grant.';
+    flash = 'Disconnected and deleted the demo grant for this Google account on this deployment.';
   }
   return buildFlashRedirect('/support', flash, {
     'set-cookie': clearDemoSessionCookie(config),

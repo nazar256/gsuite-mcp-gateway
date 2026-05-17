@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { createGoogleFetchMock, jsonResponse } from '../helpers/google-fetch';
 import { createGoogleGmailClient } from '../../src/google/gmail';
 import { extractEmailAddress } from '../../src/google/mime';
+import { createGatewayMcpServer } from '../../src/mcp/server';
+import { parseConfig } from '../../src/config';
+import { createTestEnv } from '../helpers/env';
 
 describe('gmail client', () => {
   it('constructs send request', async () => {
@@ -35,5 +38,20 @@ describe('gmail client', () => {
 
   it('extracts bare email from display-name header value', () => {
     expect(extractEmailAddress('Example User <user@example.com>')).toBe('user@example.com');
+  });
+
+  it('registers output schemas for gmail tools', () => {
+    const server = createGatewayMcpServer(parseConfig(createTestEnv()), {
+      googleAccessToken: 'token-1',
+      grantedScope: 'gmail.read gmail.send gmail.modify gmail.drafts',
+    });
+
+    const labels = (server as any)._registeredTools?.gmail_list_labels;
+    const search = (server as any)._registeredTools?.gmail_search_messages;
+    const send = (server as any)._registeredTools?.gmail_send_email;
+
+    expect(labels?.outputSchema).toBeDefined();
+    expect(search?.outputSchema).toBeDefined();
+    expect(send?.outputSchema).toBeDefined();
   });
 });

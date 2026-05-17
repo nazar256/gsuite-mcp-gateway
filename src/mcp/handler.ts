@@ -48,7 +48,8 @@ export async function handleMcpRequest(request: Request, config: AppConfig, db: 
   } catch (error) {
     const httpError = asHttpError(error);
     if (httpError.status === 401) {
-      return withCors(unauthorizedResponse(config));
+      const wwwAuthenticate = httpError.headers ? new Headers(httpError.headers).get('www-authenticate') ?? undefined : undefined;
+      return withCors(unauthorizedResponse(config, config.supportedScopes.join(' '), wwwAuthenticate));
     }
     const response = new Response(JSON.stringify({ error: httpError.code, error_description: httpError.message }), {
       status: httpError.status,

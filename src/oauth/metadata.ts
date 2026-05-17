@@ -27,7 +27,7 @@ export function getAuthorizationServerMetadata(config: AppConfig): Record<string
 
 export function buildWwwAuthenticate(
   config: AppConfig,
-  scope: string = config.supportedScopes[0] ?? 'calendar.write',
+  scope: string = config.supportedScopes.join(' '),
   error = 'invalid_token',
   description = 'A valid bearer token is required',
 ): string {

@@ -152,7 +152,7 @@ describe('oauth flow', () => {
     expect(body.error).toBe('google_identity_error');
   });
 
-  it('does not allow authorize form upgrades beyond the client-requested scope set', async () => {
+  it('allows authorize form upgrades to widen the grant scope set', async () => {
     const verifier = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~a';
     const challenge = await createS256CodeChallenge(verifier);
     const googleMock = createGoogleFetchMock({
@@ -160,7 +160,7 @@ describe('oauth flow', () => {
         access_token: 'google-access',
         refresh_token: 'google-refresh',
         expires_in: 3600,
-        scope: 'openid email profile https://www.googleapis.com/auth/calendar.events',
+        scope: 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/gmail.send',
         token_type: 'Bearer',
       }),
       'https://openidconnect.googleapis.com/v1/userinfo': jsonResponse({
@@ -180,26 +180,30 @@ describe('oauth flow', () => {
     const postAuthorize = await ctx.callWorker('/authorize', {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        response_type: 'code',
-        client_id: clientId,
-        redirect_uri: registration.redirectUri,
-        state: 'abc123',
-        code_challenge: challenge,
-        code_challenge_method: 'S256',
-        resource: 'http://localhost:8787/mcp',
-        scope: 'calendar.write offline_access',
-        upgrade_scope: 'drive.write',
-        csrf_token: csrfToken,
-      }),
+      body: (() => {
+        const form = new URLSearchParams({
+          response_type: 'code',
+          client_id: clientId,
+          redirect_uri: registration.redirectUri,
+          state: 'abc123',
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+          resource: 'http://localhost:8787/mcp',
+          scope: 'calendar.write offline_access',
+          csrf_token: csrfToken,
+        });
+        form.append('upgrade_scope', 'drive.write');
+        form.append('upgrade_scope', 'gmail.send');
+        return form;
+      })(),
       redirect: 'manual',
     });
 
     expect(postAuthorize.status).toBe(302);
     const googleRedirect = new URL(postAuthorize.headers.get('location')!);
     const googleScopes = new Set((googleRedirect.searchParams.get('scope') ?? '').split(' ').filter(Boolean));
-    expect(googleScopes.has('https://www.googleapis.com/auth/drive')).toBe(false);
-    expect(googleScopes.has('https://www.googleapis.com/auth/drive.file')).toBe(false);
+    expect(googleScopes.has('https://www.googleapis.com/auth/drive')).toBe(true);
+    expect(googleScopes.has('https://www.googleapis.com/auth/gmail.send')).toBe(true);
   });
 
   it('stores self-hosted demo grants in a separate namespace from normal subject grants', async () => {

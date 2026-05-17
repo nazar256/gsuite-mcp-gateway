@@ -1,5 +1,6 @@
 import type { AppConfig, Env } from './config';
 import { parseConfig } from './config';
+import { parseBearerToken } from './mcp/auth';
 import { handleAuthorizeGet, handleAuthorizePost } from './oauth/authorize';
 import { handleGoogleCallback, handleGoogleStart } from './oauth/google';
 import { getAuthorizationServerMetadata, getProtectedResourceMetadata, buildWwwAuthenticate } from './oauth/metadata';
@@ -157,8 +158,7 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (['GET', 'POST', 'DELETE'].includes(request.method) && url.pathname === '/mcp') {
-    const auth = request.headers.get('authorization');
-    if (!auth?.startsWith('Bearer ')) {
+    if (!parseBearerToken(request)) {
       return withCors(new Response(JSON.stringify({ error: 'invalid_token', error_description: 'A valid bearer token is required' }), {
         status: 401,
         headers: {

@@ -18,7 +18,7 @@ gcloud services enable \
   drive.googleapis.com
 ```
 
-Drive is optional and not part of the default personal-use smoke-test path.
+Drive support is included in the default self-hosted smoke-test path and uses the broader `drive` Google scope so listing, shared-drive access, folder creation, renames, moves, and file management work consistently.
 
 ## 3. Configure Google Auth Platform
 
@@ -39,6 +39,8 @@ In Google Cloud Console:
 
 For personal/self-hosted use, Google public publishing/verification is not required.
 
+The open-source project repository is `https://github.com/nazar256/gsuite-mcp-gateway`, but each deployment should publish its own operator contact details on `/support`, `/privacy`, and `/terms`.
+
 ## 4. Add default scopes
 
 Recommended default scopes:
@@ -46,10 +48,10 @@ Recommended default scopes:
 - `openid`
 - `email`
 - `profile`
-- `https://www.googleapis.com/auth/calendar.events` or `calendar.events.owned`
+- `https://www.googleapis.com/auth/calendar.events`
 - `https://www.googleapis.com/auth/gmail.send`
 - `https://www.googleapis.com/auth/gmail.compose`
-- optional advanced scope: `https://www.googleapis.com/auth/drive.file`
+- `https://www.googleapis.com/auth/drive`
 
 Optional advanced scopes only when needed:
 

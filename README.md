@@ -1,36 +1,59 @@
 # gsuite-mcp-gateway
 
-Self-hosted Cloudflare Worker MCP/OAuth gateway for Google Calendar, Gmail, and optional Google Drive.
+Self-hosted Cloudflare Worker MCP/OAuth gateway for Google Calendar, Gmail, and Google Drive.
 
 `gsuite-mcp-gateway` is designed for **self-hosting**. Each operator deploys their own Worker, configures their own Google OAuth application, and controls their own D1-backed encrypted token storage.
 
 > Do **not** connect your Google account to a deployment unless you operate it or trust its operator.
+
+## Prerequisites
+
+- Node.js `>=22`
+- Cloudflare account with Workers + D1 enabled
+- Google Cloud project with Calendar, Gmail, and Drive APIs enabled
+- A Google OAuth Web application configured for your Worker callback URL
 
 ## What it does
 
 This Worker acts as:
 
 - an OAuth authorization server for MCP clients such as ChatGPT or `mcpc`
-- an OAuth client for Google Calendar, Gmail, and optional Drive
+- an OAuth client for Google Calendar, Gmail, and Google Drive
 - a broker that keeps Google access/refresh tokens server-side and issues Worker-scoped tokens to MCP clients
 
 ## Self-hosted quickstart
 
+```bash
+git clone https://github.com/nazar256/gsuite-mcp-gateway.git
+cd gsuite-mcp-gateway
+npm install
+cp wrangler.toml.example wrangler.toml
+cp .dev.vars.example .dev.vars
+```
+
 1. Clone the repo
-2. `npm install`
+2. Fill in your private `wrangler.toml`
 3. Create a Google Cloud project
 4. Enable required APIs
 5. Configure Google Auth Platform in **Testing** mode
 6. Add yourself as a **Test user**
 7. Add the required Google scopes
 8. Create a **Web application** OAuth client
-9. Create a Cloudflare D1 database
-10. Copy `wrangler.toml.example` to a private `wrangler.toml`
-11. Set Worker secrets
-12. Apply D1 migrations
-13. Deploy the Worker
-14. Test `/demo`
-15. Connect your MCP client to `/mcp`
+9. Create a Cloudflare D1 database and copy its ids into `wrangler.toml`
+10. Set Worker secrets
+11. Apply D1 migrations
+12. Deploy the Worker
+13. Test `/demo`
+14. Connect your MCP client to `/mcp`
+
+Useful commands:
+
+```bash
+npm run typecheck
+npm test
+npx wrangler d1 migrations apply gsuite_mcp_gateway --remote
+npm run deploy
+```
 
 See:
 
@@ -39,6 +62,22 @@ See:
 - `docs/GOOGLE_CLOUD_RUNBOOK.md`
 - `docs/DEPLOYMENT_RUNBOOK.md`
 
+## Scope model
+
+| MCP scope | Google scope(s) typically requested | Exposed tools |
+| --- | --- | --- |
+| `calendar.read` | `calendar.readonly` | calendar read/list/freebusy tools |
+| `calendar.write` | `calendar.events` or `calendar.events.owned` | calendar create/update/delete tools |
+| `drive.read` | `drive.readonly` or implied by `drive.write` | Drive list/get/download tools |
+| `drive.write` | `drive` | Drive upload/create/move/rename/delete tools |
+| `gmail.read` | `gmail.readonly` or implied by `gmail.modify` | Gmail profile/list/search/get tools |
+| `gmail.send` | `gmail.send` | Gmail send + reply tools |
+| `gmail.modify` | `gmail.modify` | Gmail label/archive/trash/read-unread tools |
+| `gmail.drafts` | `gmail.compose` | Gmail draft creation tools |
+| `offline_access` | no extra Google API scope; requires refresh-token grant | Worker refresh-token issuance |
+
+The repository is open source, but `package.json` is marked `private` because this project is meant to be deployed from source rather than published to npm.
+
 ## Recommended default Google scopes for personal use
 
 Keep your Google app in **Testing** mode and start with these scopes:
@@ -46,10 +85,10 @@ Keep your Google app in **Testing** mode and start with these scopes:
 - `openid`
 - `email`
 - `profile`
-- `https://www.googleapis.com/auth/calendar.events` or `calendar.events.owned`
+- `https://www.googleapis.com/auth/calendar.events`
 - `https://www.googleapis.com/auth/gmail.send`
 - `https://www.googleapis.com/auth/gmail.compose`
-- optional: `https://www.googleapis.com/auth/drive.file`
+- `https://www.googleapis.com/auth/drive` (needed for listing, folder creation, rename/move, upload, download, and delete operations)
 
 Optional advanced scopes for broader read/modify behavior should be added only if you need them.
 
@@ -144,6 +183,12 @@ Not required for normal personal **Testing** mode. It is needed only if you want
 ### `insufficient_scope`
 
 The requested action requires a Google scope that was not granted or configured in your Google OAuth app.
+
+## Support
+
+- For deployment-specific support, deletion requests, or trust questions, contact the operator of the deployment you are using.
+- For open-source project bugs or improvement requests, use the GitHub issue tracker: <https://github.com/nazar256/gsuite-mcp-gateway/issues>
+- For security-sensitive reports, see `SECURITY.md`.
 
 ## Notes on publishing
 

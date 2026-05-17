@@ -27,6 +27,19 @@ function extractReason(payload: GoogleErrorPayload): string | undefined {
   return payload.error?.errors?.[0]?.reason ?? payload.error?.status;
 }
 
+function isScopeError(reason: string | undefined): boolean {
+  if (!reason) {
+    return false;
+  }
+
+  return [
+    'insufficient_scope',
+    'insufficientpermissions',
+    'insufficient_permissions',
+    'access_token_scope_insufficient',
+  ].includes(reason.toLowerCase());
+}
+
 export async function parseGoogleJson(response: Response): Promise<unknown> {
   const text = await response.text();
   if (!text) {
@@ -51,7 +64,7 @@ export async function expectGoogleJson<T>(response: Response): Promise<T> {
       throw new HttpError(401, 'invalid_token', 'Google authorization is no longer valid');
     }
 
-    if (reason === 'insufficient_scope' || response.status === 403) {
+    if (isScopeError(reason)) {
       throw new HttpError(403, 'insufficient_scope', message);
     }
 

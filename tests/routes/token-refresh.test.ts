@@ -3,6 +3,10 @@ import { createWorkerTestContext } from '../helpers/worker';
 import { createGoogleFetchMock, jsonResponse } from '../helpers/google-fetch';
 import { extractHiddenInput, registerClient } from '../helpers/oauth-flow';
 import { createS256CodeChallenge } from '../../src/oauth/pkce';
+import { getGrantById, upsertGrant } from '../../src/storage/grants';
+import { parseConfig } from '../../src/config';
+import { encryptJson } from '../../src/security/crypto';
+import { decryptStoredGoogleTokenSet } from '../../src/google/oauth';
 
 async function completeBaseFlow() {
   const verifier = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~a';
@@ -77,5 +81,43 @@ describe('token refresh', () => {
     expect(refreshResponse.status).toBe(200);
     expect(json.access_token).toBeTypeOf('string');
     expect(json.refresh_token).toBeTypeOf('string');
+  });
+
+  it('reissues tokens using the current stored grant scopes', async () => {
+    const flow = await completeBaseFlow();
+    const config = parseConfig(flow.ctx.env);
+    const refreshClaims = JSON.parse(Buffer.from(flow.refreshToken.split('.')[1]!, 'base64url').toString('utf8')) as { grant_id: string; sub: string };
+    const existingGrant = await getGrantById(flow.ctx.db, refreshClaims.grant_id);
+    if (!existingGrant) {
+      throw new Error('expected existing grant');
+    }
+
+    const existingTokenSet = await decryptStoredGoogleTokenSet(config, existingGrant);
+    await upsertGrant(flow.ctx.db, {
+      grantId: existingGrant.grant_id,
+      subject: existingGrant.subject,
+      encryptedGoogleTokens: await encryptJson(existingTokenSet, config.tokenEncryptionKey, {
+        grant_id: existingGrant.grant_id,
+        subject: existingGrant.subject,
+        kind: 'google_tokens',
+      }),
+      grantedMcpScopes: 'calendar.read calendar.write',
+      grantedGoogleScopes: existingGrant.granted_google_scopes,
+    });
+
+    const refreshResponse = await flow.ctx.callWorker('/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: flow.refreshToken,
+        client_id: flow.clientId,
+      }),
+    });
+
+    const json = await refreshResponse.json() as Record<string, unknown>;
+    expect(refreshResponse.status).toBe(200);
+    expect(json.scope).toBe('calendar.read calendar.write');
+    expect(json.refresh_token).toBeUndefined();
   });
 });

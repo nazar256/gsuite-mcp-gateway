@@ -7,7 +7,7 @@ import { cleanupExpiredCodes, createOAuthCode } from '../storage/codes';
 import type { DbLike } from '../storage/d1';
 import { getGrantBySubject, getGrantBySubjectNamespace, makeNamespacedSubject, upsertGrant } from '../storage/grants';
 import { createStoredGoogleTokenSet, decryptStoredGoogleTokenSet, exchangeGoogleAuthorizationCode, resolveGoogleIdentity, type StoredGoogleTokenSet } from '../google/oauth';
-import { inferGrantedMcpScopes, getRequiredGoogleScopes } from './scopes';
+import { inferGrantedMcpScopes, getRequiredGoogleScopes, normalizeGrantedMcpScope } from './scopes';
 import type { AuthorizationCodePayload, AuthorizationStatePayload } from './types';
 
 export async function handleGoogleCallback(request: Request, config: AppConfig, db: DbLike): Promise<Response> {
@@ -71,7 +71,7 @@ export async function handleGoogleCallback(request: Request, config: AppConfig, 
         subject: namespacedSubject,
         kind: 'google_tokens',
       }),
-      grantedMcpScopes: grantedMcpScopes.join(' '),
+      grantedMcpScopes: normalizeGrantedMcpScope(grantedMcpScopes.join(' ')),
       grantedGoogleScopes: tokenSet.grantedGoogleScopes.join(' '),
     });
 
@@ -85,7 +85,7 @@ export async function handleGoogleCallback(request: Request, config: AppConfig, 
       codeChallenge: validatedStatePayload.codeChallenge,
       codeChallengeMethod: validatedStatePayload.codeChallengeMethod,
       resource: validatedStatePayload.resource,
-      scope: grantedMcpScopes.join(' '),
+      scope: normalizeGrantedMcpScope(grantedMcpScopes.join(' ')),
       grantId,
       subject: namespacedSubject,
       createdAt: new Date().toISOString(),

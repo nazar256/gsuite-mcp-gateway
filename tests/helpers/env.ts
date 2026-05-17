@@ -10,7 +10,7 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
     MCP_RESOURCE: 'http://localhost:8787/mcp',
     MCP_AUDIENCE: 'http://localhost:8787/mcp',
     GOOGLE_CALLBACK_URL: 'http://localhost:8787/oauth/google/callback',
-    GOOGLE_CALENDAR_WRITE_SCOPE_MODE: 'owned',
+    GOOGLE_CALENDAR_WRITE_SCOPE_MODE: 'all',
     AUTH_STORAGE_MODE: 'd1',
     DEFAULT_TIME_ZONE: 'Europe/Amsterdam',
     ACCESS_TOKEN_TTL_SECONDS: '3600',

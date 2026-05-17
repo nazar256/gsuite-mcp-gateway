@@ -46,6 +46,8 @@ printf '%s' 'YOUR_GOOGLE_CLIENT_ID' | npx wrangler secret put GOOGLE_CLIENT_ID
 printf '%s' 'YOUR_GOOGLE_CLIENT_SECRET' | npx wrangler secret put GOOGLE_CLIENT_SECRET
 ```
 
+If you plan to use ChatGPT or `mcpc`, include the callback/origin patterns you need in your private `wrangler.toml` allowlists.
+
 ## 5. Run checks
 
 ```bash
@@ -101,4 +103,4 @@ Recommended validation order:
 2. check status
 3. create/delete a test calendar event
 4. create a Gmail draft or send email to yourself only
-5. disconnect/delete demo-session grant
+5. disconnect/delete the demo grant for the current Google account on this deployment
