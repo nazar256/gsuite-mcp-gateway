@@ -18,3 +18,10 @@
 ## DEC-004: Direct Google REST integration
 
 - Use direct `fetch` wrappers for Google Calendar API and Gmail API instead of the Node-focused `googleapis` SDK.
+
+## DEC-005: Self-hosted BYO Google OAuth posture
+
+- The project is designed for self-hosting.
+- Each operator uses their own Google Cloud project and OAuth app.
+- Normal personal use should keep the Google app in Testing mode with explicit Test users.
+- Public Google app publishing/verification is optional and only needed for operators serving other people.

@@ -37,6 +37,11 @@ export function validateRedirectUri(raw: string, config: AppConfig): URL {
     throw new HttpError(400, 'invalid_redirect_uri', 'redirect_uri must use HTTPS or localhost HTTP');
   }
 
+  const sameOriginDemoCallback = url.origin === config.issuerUrl.origin && url.pathname === '/demo/oauth/callback';
+  if (sameOriginDemoCallback) {
+    return url;
+  }
+
   if (!matchesPattern(url.toString(), config.redirectUriAllowlist)) {
     throw new HttpError(400, 'invalid_redirect_uri', 'redirect_uri is not allowlisted');
   }

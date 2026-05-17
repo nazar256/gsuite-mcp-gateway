@@ -11,7 +11,7 @@ describe('root routes', () => {
     const demo = await ctx.callWorker('/demo');
     const health = await ctx.callWorker('/health');
     expect(root.status).toBe(200);
-    expect(await root.text()).toContain('lets a user connect their Google Calendar, Gmail, and Google Drive');
+    expect(await root.text()).toContain('is a self-hosted Cloudflare Worker MCP gateway');
     expect(privacy.status).toBe(200);
     expect(terms.status).toBe(200);
     expect(support.status).toBe(200);
@@ -31,7 +31,7 @@ describe('root routes', () => {
 
     const resourceJson = await resource.json() as Record<string, unknown>;
     expect(resourceJson.resource_name).toBe('Google Workspace MCP Gateway');
-    expect(resourceJson.scopes_supported).toEqual(['calendar.read', 'calendar.write', 'drive.read', 'drive.write', 'gmail.read', 'gmail.send', 'gmail.modify', 'gmail.drafts', 'offline_access']);
+    expect(resourceJson.scopes_supported).toEqual(['calendar.write', 'gmail.send', 'gmail.drafts', 'offline_access']);
   });
 
   it('keeps disconnect as post-only and truthful without a demo session', async () => {

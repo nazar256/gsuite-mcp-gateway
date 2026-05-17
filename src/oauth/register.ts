@@ -16,7 +16,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 async function deriveClientId(redirectUri: string): Promise<string> {
-  return `gsuite-public-${await sha256Hex(redirectUri)}`;
+  return `gsuite-selfhost-${await sha256Hex(redirectUri)}`;
 }
 
 export async function handleRegister(request: Request, config: AppConfig, db: DbLike): Promise<Response> {

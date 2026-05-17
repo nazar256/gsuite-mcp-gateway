@@ -152,81 +152,6 @@ describe('oauth flow', () => {
     expect(body.error).toBe('google_identity_error');
   });
 
-  it('does not escalate issued MCP scopes when Google returns previously granted extra scopes', async () => {
-    const verifier = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~a';
-    const challenge = await createS256CodeChallenge(verifier);
-    const googleMock = createGoogleFetchMock({
-      'https://oauth2.googleapis.com/token': jsonResponse({
-        access_token: 'google-access',
-        refresh_token: 'google-refresh',
-        expires_in: 3600,
-        scope: [
-          'openid',
-          'email',
-          'profile',
-          'https://www.googleapis.com/auth/drive',
-          'https://www.googleapis.com/auth/gmail.send',
-          'https://www.googleapis.com/auth/gmail.compose',
-          'https://www.googleapis.com/auth/calendar.events',
-        ].join(' '),
-        token_type: 'Bearer',
-      }),
-      'https://openidconnect.googleapis.com/v1/userinfo': jsonResponse({
-        sub: 'google-user-drive-123',
-        email: 'me@example.com',
-      }),
-    });
-
-    const ctx = createWorkerTestContext({ fetch: googleMock.fetch });
-    const registration = await registerClient(ctx);
-    const clientId = String(registration.json.client_id);
-
-    const authorizeResponse = await ctx.callWorker(`/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(registration.redirectUri)}&state=drive-only&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=S256&resource=${encodeURIComponent('http://localhost:8787/mcp')}&scope=${encodeURIComponent('drive.write offline_access')}`);
-    const authorizeHtml = await authorizeResponse.text();
-    const csrfToken = extractHiddenInput(authorizeHtml, 'csrf_token');
-
-    const postAuthorize = await ctx.callWorker('/authorize', {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          response_type: 'code',
-          client_id: clientId,
-          redirect_uri: registration.redirectUri,
-          state: 'drive-only',
-          code_challenge: challenge,
-          code_challenge_method: 'S256',
-          resource: 'http://localhost:8787/mcp',
-          scope: 'drive.write offline_access',
-          csrf_token: csrfToken,
-        }),
-      redirect: 'manual',
-    });
-
-    const state = new URL(postAuthorize.headers.get('location')!).searchParams.get('state');
-    const callbackResponse = await ctx.callWorker(`/oauth/google/callback?state=${encodeURIComponent(state!)}&code=google-auth-code`, { redirect: 'manual' });
-    expect(callbackResponse.status).toBe(302);
-    const redirectBack = new URL(callbackResponse.headers.get('location')!);
-    const authCode = redirectBack.searchParams.get('code');
-    expect(authCode).toBeTruthy();
-
-    const tokenResponse = await ctx.callWorker('/token', {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code: authCode!,
-        client_id: clientId,
-        redirect_uri: registration.redirectUri,
-        code_verifier: verifier,
-        resource: 'http://localhost:8787/mcp',
-      }),
-    });
-
-    expect(tokenResponse.status).toBe(200);
-    const tokenJson = await tokenResponse.json() as Record<string, unknown>;
-    expect(tokenJson.scope).toBe('drive.read drive.write offline_access');
-  });
-
   it('does not allow authorize form upgrades beyond the client-requested scope set', async () => {
     const verifier = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~a';
     const challenge = await createS256CodeChallenge(verifier);
@@ -274,9 +199,10 @@ describe('oauth flow', () => {
     const googleRedirect = new URL(postAuthorize.headers.get('location')!);
     const googleScopes = new Set((googleRedirect.searchParams.get('scope') ?? '').split(' ').filter(Boolean));
     expect(googleScopes.has('https://www.googleapis.com/auth/drive')).toBe(false);
+    expect(googleScopes.has('https://www.googleapis.com/auth/drive.file')).toBe(false);
   });
 
-  it('stores reviewer-demo grants in a separate namespace from normal subject grants', async () => {
+  it('stores self-hosted demo grants in a separate namespace from normal subject grants', async () => {
     const verifier = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~a';
     const challenge = await createS256CodeChallenge(verifier);
     const googleMock = createGoogleFetchMock({
@@ -284,7 +210,7 @@ describe('oauth flow', () => {
         access_token: 'google-access',
         refresh_token: 'google-refresh',
         expires_in: 3600,
-        scope: 'openid email profile https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events',
+        scope: 'openid email profile https://www.googleapis.com/auth/calendar.events.owned',
         token_type: 'Bearer',
       }),
       'https://openidconnect.googleapis.com/v1/userinfo': jsonResponse({
@@ -296,14 +222,14 @@ describe('oauth flow', () => {
     const ctx = createWorkerTestContext({ fetch: googleMock.fetch });
     const normal = await registerClient(ctx, 'https://chatgpt.com/connector/oauth/normal');
     await upsertOAuthClient(ctx.db, {
-      clientId: 'reviewer-demo',
+      clientId: 'self-hosted-demo',
       redirectUri: 'http://localhost:8787/demo/oauth/callback',
-      clientName: 'Reviewer Demo Client',
+      clientName: 'Self-hosted Demo Client',
     });
 
     for (const [clientId, redirectUri, state, grantNamespace] of [
       [String(normal.json.client_id), normal.redirectUri, 'normal-state', undefined],
-      ['reviewer-demo', 'http://localhost:8787/demo/oauth/callback', 'demo-state', 'demo'],
+      ['self-hosted-demo', 'http://localhost:8787/demo/oauth/callback', 'demo-state', 'demo'],
     ] as const) {
       const authorizeUrl = new URL('/authorize', 'http://localhost:8787');
       authorizeUrl.searchParams.set('response_type', 'code');

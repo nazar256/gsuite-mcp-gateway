@@ -5,7 +5,7 @@ import { getRequiredGoogleScopes, hasScope, inferGrantedMcpScopes, normalizeMcpS
 
 describe('oauth scopes', () => {
   it('normalizes supported scope order', () => {
-    expect(normalizeMcpScope('gmail.send drive.write calendar.write gmail.send')).toBe('calendar.read calendar.write drive.read drive.write gmail.send');
+    expect(normalizeMcpScope('gmail.send calendar.write gmail.send')).toBe('calendar.write gmail.send');
   });
 
   it('maps calendar.write according to mode', () => {
@@ -20,21 +20,7 @@ describe('oauth scopes', () => {
     const config = parseConfig(createTestEnv());
     expect(getRequiredGoogleScopes(config, 'calendar.write')).toEqual([
       'email',
-      'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
-      'https://www.googleapis.com/auth/calendar.events',
-      'https://www.googleapis.com/auth/calendar.events.freebusy',
-      'https://www.googleapis.com/auth/calendar.events.readonly',
-      'openid',
-      'profile',
-    ]);
-  });
-
-  it('maps drive scopes to Google Drive scopes', () => {
-    const config = parseConfig(createTestEnv());
-    expect(getRequiredGoogleScopes(config, 'drive.write')).toEqual([
-      'email',
-      'https://www.googleapis.com/auth/drive',
-      'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/calendar.events.owned',
       'openid',
       'profile',
     ]);
@@ -46,10 +32,9 @@ describe('oauth scopes', () => {
       'openid',
       'email',
       'profile',
-      'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
-      'https://www.googleapis.com/auth/calendar.events',
+      'https://www.googleapis.com/auth/calendar.events.owned',
       'https://www.googleapis.com/auth/gmail.send',
-    ])).toEqual(['calendar.read', 'calendar.write', 'gmail.send']);
+    ])).toEqual(['calendar.write', 'gmail.send']);
   });
 
   it('checks granted scope membership', () => {

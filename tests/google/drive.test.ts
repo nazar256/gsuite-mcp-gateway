@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGoogleFetchMock, jsonResponse } from '../helpers/google-fetch';
 import { createGoogleDriveClient } from '../../src/google/drive';
-import { createGatewayMcpServer } from '../../src/mcp/server';
-import { parseConfig } from '../../src/config';
-import { createTestEnv } from '../helpers/env';
 
 describe('drive client', () => {
   it('constructs list query with shared-drive flags', async () => {
@@ -35,29 +32,4 @@ describe('drive client', () => {
     expect(mock.requests[0]?.headers['content-type']).toContain('multipart/related; boundary=');
   });
 
-  it('registers drive verification tools when drive.write is granted', () => {
-    const server = createGatewayMcpServer(parseConfig(createTestEnv()), {
-      googleAccessToken: 'token-1',
-      grantedScope: 'drive.write',
-    });
-
-    const toolNames = Object.keys((server as any)._registeredTools ?? {});
-    expect(toolNames).toEqual(expect.arrayContaining(['drive_upload_file', 'drive_delete_file']));
-  });
-
-  it('reports invalid base64 as invalid_request', async () => {
-    const server = createGatewayMcpServer(parseConfig(createTestEnv()), {
-      googleAccessToken: 'token-1',
-      grantedScope: 'drive.write',
-    });
-
-    const tool = (server as any)._registeredTools?.drive_upload_file;
-    const result = await tool.handler({
-      name: 'bad.bin',
-      contentBase64: 'not-valid-***',
-    }, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toMatch(/valid base64/i);
-  });
 });

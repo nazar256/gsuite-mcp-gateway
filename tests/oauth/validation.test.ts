@@ -24,7 +24,7 @@ describe('oauth validation', () => {
   it('parses authorization requests', () => {
     const request = new Request('http://localhost:8787/authorize?response_type=code&client_id=test&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fconnector%2Foauth%2Fabc&state=xyz&code_challenge=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~a&code_challenge_method=S256&resource=http%3A%2F%2Flocalhost%3A8787%2Fmcp&scope=gmail.send%20calendar.write');
     const parsed = parseAuthorizationRequest(request, config);
-    expect(parsed.scope).toBe('calendar.read calendar.write gmail.send');
+    expect(parsed.scope).toBe('calendar.write gmail.send');
     expect(parsed.state).toBe('xyz');
   });
 

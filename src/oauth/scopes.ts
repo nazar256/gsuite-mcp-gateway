@@ -2,33 +2,14 @@ import type { AppConfig, SupportedMcpScope } from '../config';
 import { HttpError } from '../security/errors';
 
 export const GOOGLE_SCOPE_BY_MCP_SCOPE: Record<Exclude<SupportedMcpScope, 'offline_access' | 'calendar.write'> | 'calendar.write.owned' | 'calendar.write.all', string[]> = {
-  'calendar.read': [
-    'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
-    'https://www.googleapis.com/auth/calendar.events.readonly',
-    'https://www.googleapis.com/auth/calendar.events.freebusy',
-  ],
   'calendar.write.owned': [
-    'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
     'https://www.googleapis.com/auth/calendar.events.owned',
   ],
   'calendar.write.all': [
-    'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
     'https://www.googleapis.com/auth/calendar.events',
-  ],
-  'drive.read': [
-    'https://www.googleapis.com/auth/drive.readonly',
-  ],
-  'drive.write': [
-    'https://www.googleapis.com/auth/drive',
-  ],
-  'gmail.read': [
-    'https://www.googleapis.com/auth/gmail.readonly',
   ],
   'gmail.send': [
     'https://www.googleapis.com/auth/gmail.send',
-  ],
-  'gmail.modify': [
-    'https://www.googleapis.com/auth/gmail.modify',
   ],
   'gmail.drafts': [
     'https://www.googleapis.com/auth/gmail.compose',
@@ -36,43 +17,15 @@ export const GOOGLE_SCOPE_BY_MCP_SCOPE: Record<Exclude<SupportedMcpScope, 'offli
 };
 
 const canonicalScopeOrder: SupportedMcpScope[] = [
-  'calendar.read',
   'calendar.write',
-  'drive.read',
-  'drive.write',
-  'gmail.read',
   'gmail.send',
-  'gmail.modify',
   'gmail.drafts',
   'offline_access',
 ];
 
 const BASE_GOOGLE_IDENTITY_SCOPES = ['openid', 'email', 'profile'] as const;
-const IMPLIED_MCP_SCOPES: Partial<Record<SupportedMcpScope, SupportedMcpScope[]>> = {
-  'calendar.write': ['calendar.read'],
-  'drive.write': ['drive.read'],
-  'gmail.modify': ['gmail.read'],
-};
-const GOOGLE_SCOPE_SUPERSETS: Record<string, string[]> = {
-  'https://www.googleapis.com/auth/calendar.calendarlist.readonly': [
-    'https://www.googleapis.com/auth/calendar.events',
-    'https://www.googleapis.com/auth/calendar.events.owned',
-  ],
-  'https://www.googleapis.com/auth/calendar.events.readonly': [
-    'https://www.googleapis.com/auth/calendar.events',
-    'https://www.googleapis.com/auth/calendar.events.owned',
-  ],
-  'https://www.googleapis.com/auth/calendar.events.freebusy': [
-    'https://www.googleapis.com/auth/calendar.events',
-    'https://www.googleapis.com/auth/calendar.events.owned',
-  ],
-  'https://www.googleapis.com/auth/drive.readonly': [
-    'https://www.googleapis.com/auth/drive',
-  ],
-  'https://www.googleapis.com/auth/gmail.readonly': [
-    'https://www.googleapis.com/auth/gmail.modify',
-  ],
-};
+const IMPLIED_MCP_SCOPES: Partial<Record<SupportedMcpScope, SupportedMcpScope[]>> = {};
+const GOOGLE_SCOPE_SUPERSETS: Record<string, string[]> = {};
 
 function hasGrantedGoogleScope(granted: Set<string>, requiredScope: string): boolean {
   if (granted.has(requiredScope)) {
@@ -84,7 +37,7 @@ function hasGrantedGoogleScope(granted: Set<string>, requiredScope: string): boo
 
 export function normalizeMcpScope(scope?: string | null): string {
   if (!scope || !scope.trim()) {
-    return 'calendar.read';
+    return 'calendar.write';
   }
 
   const requested = new Set(scope.split(/\s+/).filter(Boolean));

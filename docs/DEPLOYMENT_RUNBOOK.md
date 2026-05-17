@@ -1,6 +1,6 @@
 # Deployment Runbook
 
-This runbook describes how to deploy `gsuite-mcp-gateway` to Cloudflare Workers using a fresh Google Cloud project.
+This runbook describes how to deploy `gsuite-mcp-gateway` as a **self-hosted Cloudflare Worker**.
 
 ## 1. Prepare private deploy config
 
@@ -27,107 +27,78 @@ npx wrangler d1 create gsuite_mcp_gateway
 
 Copy the returned ids into `wrangler.toml`.
 
-For `wrangler dev --remote` with D1, set `preview_database_id` too.
-
 ## 3. Apply migrations
-
-Local / preview style:
 
 ```bash
 npx wrangler d1 migrations apply gsuite_mcp_gateway --local
-```
-
-Remote:
-
-```bash
 npx wrangler d1 migrations apply gsuite_mcp_gateway --remote
 ```
 
-### Upgrade note for older deployments
-
-Supported automated upgrade path:
-
-1. apply all migrations, including the migration that removes the plaintext `google_email` grant column from the current `grants` table shape;
-2. require users/clients to re-authorize so the Worker can bind refreshed grants to Google OIDC `sub` via `userinfo`.
-
-This public repo does **not** claim a generic automated migration for arbitrary older/private schema variants. If your deployed schema differs materially from the current `grants` table family, use a fresh database or a separate manual migration plan.
-
 ## 4. Set Worker secrets
 
-Locally generated secrets must be generated and piped directly, one by one:
+Locally generated secrets must be generated and piped directly:
 
 ```bash
 openssl rand -base64 48 | tr -d '\n' | npx wrangler secret put JWT_SIGNING_KEY_B64
 openssl rand -base64 32 | tr -d '\n' | npx wrangler secret put TOKEN_ENC_KEY_B64
 openssl rand -base64 48 | tr -d '\n' | npx wrangler secret put CSRF_SIGNING_KEY_B64
-```
-
-Operator-provided secrets:
-
-```bash
 printf '%s' 'YOUR_GOOGLE_CLIENT_ID' | npx wrangler secret put GOOGLE_CLIENT_ID
 printf '%s' 'YOUR_GOOGLE_CLIENT_SECRET' | npx wrangler secret put GOOGLE_CLIENT_SECRET
 ```
 
-In CI, prefer passing secret-manager values through stdin rather than exposing them in logs.
-
 ## 5. Run checks
 
 ```bash
-npm test
 npm run typecheck
+npm test
 ```
 
-## 6. Deploy
+## 6. Run locally
 
 ```bash
-npm run deploy
+npx wrangler dev --port 8787
 ```
 
-## 7. Verify metadata and bearer challenge
+Verify:
 
 ```bash
-BASE_URL=https://YOUR-WORKER.your-subdomain.workers.dev npm run smoke:remote
+curl -i http://localhost:8787/
+curl -i http://localhost:8787/privacy
+curl -i http://localhost:8787/terms
+curl -i http://localhost:8787/support
+curl -i http://localhost:8787/demo
+curl -i http://localhost:8787/mcp
 ```
 
-## 8. Validate authenticated flow
-
-The Worker always adds Google OpenID Connect identity scopes (`openid email`) to the requested Google scope set and resolves the stable Google account id from `https://openidconnect.googleapis.com/v1/userinfo`. If `userinfo` is unavailable, the callback fails closed rather than binding grants to mutable email addresses.
-
-Recommended validation path:
-
-1. use `mcpc` locally first
-2. run OAuth via controlled Chrome
-3. validate read-only tools first
-4. validate reversible writes and clean them up
-
-Example:
+## 7. Deploy
 
 ```bash
-mcpc login https://YOUR-WORKER.your-subdomain.workers.dev/mcp --profile prod --scope "calendar.read calendar.write offline_access"
-mcpc connect https://YOUR-WORKER.your-subdomain.workers.dev/mcp --profile prod
+npx wrangler deploy
 ```
 
-On Linux, for controlled-browser OAuth debugging, use:
+## 8. Verify deployed pages
 
 ```bash
-BROWSER="$HOME/.config/opencode/skills/agents-browser-debug/scripts/open-debug-chrome.sh" mcpc login ...
+curl -i https://YOUR-WORKER.your-subdomain.workers.dev/
+curl -i https://YOUR-WORKER.your-subdomain.workers.dev/privacy
+curl -i https://YOUR-WORKER.your-subdomain.workers.dev/terms
+curl -i https://YOUR-WORKER.your-subdomain.workers.dev/support
+curl -i https://YOUR-WORKER.your-subdomain.workers.dev/demo
+curl -i https://YOUR-WORKER.your-subdomain.workers.dev/mcp
 ```
 
-## 9. Suggested production env choices
+## 9. OAuth validation
 
-- `APP_ENV=production`
-- `AUTH_STORAGE_MODE=d1` (the only supported mode)
-- `GOOGLE_CALENDAR_WRITE_SCOPE_MODE=all` if you need shared-calendar writes
-- `DEFAULT_TIME_ZONE` set to your operator default
+For personal use:
 
-Drive-specific validation notes:
+- keep the Google app in **Testing** mode
+- add yourself as a **Test user**
+- test via `/demo`
 
-- `drive_download_file` is intended for small MCP-friendly transfers, not bulk file syncing.
-- Google Workspace-native files require `exportMimeType` for download/export.
+Recommended validation order:
 
-## 10. Rollout notes
-
-- prefer a custom domain for long-lived production deployments
-- verify OAuth redirect URIs exactly
-- verify Gmail scope/review posture before public rollout
+1. connect Google account
+2. check status
+3. create/delete a test calendar event
+4. create a Gmail draft or send email to yourself only
+5. disconnect/delete demo-session grant

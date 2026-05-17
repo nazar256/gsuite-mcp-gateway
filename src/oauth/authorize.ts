@@ -11,14 +11,14 @@ import { parseAuthorizationForm, parseAuthorizationRequest } from './validation'
 import type { AuthorizationStatePayload } from './types';
 
 const DEMO_GRANT_NAMESPACE = 'demo';
-const DEMO_CLIENT_ID = 'reviewer-demo';
+const DEMO_CLIENT_ID = 'self-hosted-demo';
 
 function validateGrantNamespace(clientId: string, redirectUri: string, grantNamespace?: string): string | undefined {
   const isReviewerDemoClient = clientId === DEMO_CLIENT_ID && redirectUri.endsWith('/demo/oauth/callback');
 
   if (!grantNamespace) {
     if (isReviewerDemoClient) {
-      throw new HttpError(400, 'invalid_request', 'reviewer demo authorization must use grant_namespace=demo');
+      throw new HttpError(400, 'invalid_request', 'self-hosted demo authorization must use grant_namespace=demo');
     }
     return undefined;
   }
@@ -27,7 +27,7 @@ function validateGrantNamespace(clientId: string, redirectUri: string, grantName
     grantNamespace !== DEMO_GRANT_NAMESPACE
     || !isReviewerDemoClient
   ) {
-    throw new HttpError(400, 'invalid_request', 'grant_namespace is reserved for the built-in reviewer demo flow');
+    throw new HttpError(400, 'invalid_request', 'grant_namespace is reserved for the built-in self-hosted demo flow');
   }
 
   return grantNamespace;
@@ -63,7 +63,6 @@ function renderConsentPage(config: AppConfig, request: ReturnType<typeof parseAu
   const requestedSet = new Set(request.scope.split(' ').filter(Boolean));
   const upgradeOptions: Array<{ key: string; label: string; description: string }> = [
     { key: 'calendar.write', label: 'calendar.write', description: 'Create, update, and delete Google Calendar events requested by the user' },
-    { key: 'drive.write', label: 'drive.write', description: 'Create, read, download, and delete Google Drive files explicitly requested by the user' },
     { key: 'gmail.send', label: 'gmail.send', description: 'Send email via Gmail' },
     { key: 'gmail.drafts', label: 'gmail.drafts', description: 'Create Gmail drafts for review before sending' },
     { key: 'offline_access', label: 'offline_access', description: 'Allow refresh (server-side) so sessions can persist' },
@@ -93,7 +92,7 @@ function renderConsentPage(config: AppConfig, request: ReturnType<typeof parseAu
   <body style="font-family: system-ui, sans-serif; max-width: 48rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5;">
     <h1>Connect Google Workspace</h1>
     <p>This app is requesting Google access through <strong>gsuite-mcp-gateway</strong>. Google access tokens and refresh tokens stay server-side in encrypted storage.</p>
-    <p>Public information for reviewers and users: <a href="/">home</a> · <a href="/privacy">privacy</a> · <a href="/terms">terms</a> · <a href="/support">support</a> · <a href="/demo">demo</a></p>
+    <p>This is a self-hosted deployment. Public information for this operator-run instance: <a href="/">home</a> · <a href="/privacy">privacy</a> · <a href="/terms">terms</a> · <a href="/support">support</a> · <a href="/demo">demo</a></p>
     <p><strong>Requested MCP scopes</strong></p>
     <ul>${scopeList}</ul>
     <p><strong>Google scopes that will be requested</strong></p>
