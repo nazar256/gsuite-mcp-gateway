@@ -8,6 +8,7 @@ export interface AuthorizationStatePayload {
   codeChallengeMethod: 'S256';
   resource: string;
   scope: string;
+  grantNamespace?: string;
   createdAt: string;
 }
 

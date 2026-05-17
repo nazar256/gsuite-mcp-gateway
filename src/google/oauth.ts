@@ -184,10 +184,13 @@ export async function refreshGrantGoogleTokens(
       ...(tokenSet.googleEmail !== undefined ? { email: tokenSet.googleEmail } : {}),
     }, tokenSet);
 
-    const grantedMcpScopes = inferGrantedMcpScopes(config, nextTokenSet.grantedGoogleScopes);
-    if (nextTokenSet.refreshToken) {
+    const existingGrantScopes = new Set(grant.granted_mcp_scopes.split(' ').filter(Boolean));
+    const grantedMcpScopes = inferGrantedMcpScopes(config, nextTokenSet.grantedGoogleScopes)
+      .filter((scope) => existingGrantScopes.has(scope));
+    if (nextTokenSet.refreshToken && existingGrantScopes.has('offline_access')) {
       grantedMcpScopes.push('offline_access');
     }
+    grantedMcpScopes.sort();
 
     await upsertGrant(db, {
       grantId: grant.grant_id,

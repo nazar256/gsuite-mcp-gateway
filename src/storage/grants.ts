@@ -14,6 +14,17 @@ export interface GrantRecord {
   revoked_at: string | null;
 }
 
+function splitSubjectParts(subject: string): { baseSubject: string; namespace: string | null } {
+  const idx = subject.indexOf('#');
+  if (idx === -1) {
+    return { baseSubject: subject, namespace: null };
+  }
+  return {
+    baseSubject: subject.slice(0, idx),
+    namespace: subject.slice(idx + 1) || null,
+  };
+}
+
 export async function getGrantById(db: DbLike, grantId: string): Promise<(GrantRecord & { parsed_envelope: EncryptedEnvelope }) | null> {
   const row = await getFirst<GrantRecord>(
     db.prepare(`
@@ -40,6 +51,18 @@ export async function getGrantBySubject(db: DbLike, subject: string): Promise<(G
 
   if (!row) return null;
   return { ...row, parsed_envelope: parseEnvelope(row.encrypted_google_tokens) };
+}
+
+export async function getGrantBySubjectNamespace(db: DbLike, baseSubject: string, namespace: string): Promise<(GrantRecord & { parsed_envelope: EncryptedEnvelope }) | null> {
+  return getGrantBySubject(db, `${baseSubject}#${namespace}`);
+}
+
+export function makeNamespacedSubject(baseSubject: string, namespace: string): string {
+  return `${baseSubject}#${namespace}`;
+}
+
+export function getGrantBaseSubject(subject: string): string {
+  return splitSubjectParts(subject).baseSubject;
 }
 
 export async function upsertGrant(
@@ -85,4 +108,8 @@ export async function upsertGrant(
 
 export async function revokeGrant(db: DbLike, grantId: string): Promise<void> {
   await runStatement(db.prepare('UPDATE grants SET revoked_at = ?, updated_at = ? WHERE grant_id = ?').bind(isoNow(), isoNow(), grantId));
+}
+
+export async function deleteGrant(db: DbLike, grantId: string): Promise<void> {
+  await runStatement(db.prepare('DELETE FROM grants WHERE grant_id = ?').bind(grantId));
 }

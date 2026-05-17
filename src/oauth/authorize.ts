@@ -6,9 +6,32 @@ import type { DbLike } from '../storage/d1';
 import { cleanupExpiredStates, createOAuthState } from '../storage/states';
 import { getOAuthClient } from '../storage/clients';
 import { buildGoogleAuthorizationUrl } from '../google/oauth';
-import { getRequiredGoogleScopes } from './scopes';
+import { getRequiredGoogleScopes, normalizeMcpScope } from './scopes';
 import { parseAuthorizationForm, parseAuthorizationRequest } from './validation';
 import type { AuthorizationStatePayload } from './types';
+
+const DEMO_GRANT_NAMESPACE = 'demo';
+const DEMO_CLIENT_ID = 'reviewer-demo';
+
+function validateGrantNamespace(clientId: string, redirectUri: string, grantNamespace?: string): string | undefined {
+  const isReviewerDemoClient = clientId === DEMO_CLIENT_ID && redirectUri.endsWith('/demo/oauth/callback');
+
+  if (!grantNamespace) {
+    if (isReviewerDemoClient) {
+      throw new HttpError(400, 'invalid_request', 'reviewer demo authorization must use grant_namespace=demo');
+    }
+    return undefined;
+  }
+
+  if (
+    grantNamespace !== DEMO_GRANT_NAMESPACE
+    || !isReviewerDemoClient
+  ) {
+    throw new HttpError(400, 'invalid_request', 'grant_namespace is reserved for the built-in reviewer demo flow');
+  }
+
+  return grantNamespace;
+}
 
 function htmlEscape(value: string): string {
   return value
@@ -39,18 +62,17 @@ function renderConsentPage(config: AppConfig, request: ReturnType<typeof parseAu
 
   const requestedSet = new Set(request.scope.split(' ').filter(Boolean));
   const upgradeOptions: Array<{ key: string; label: string; description: string }> = [
-    { key: 'calendar.write', label: 'calendar.write', description: 'Create/update/delete events (owned + shared calendars where permitted)' },
-    { key: 'gmail.read', label: 'gmail.read', description: 'Read Gmail messages/metadata' },
+    { key: 'calendar.write', label: 'calendar.write', description: 'Create, update, and delete Google Calendar events requested by the user' },
+    { key: 'drive.write', label: 'drive.write', description: 'Create, read, download, and delete Google Drive files explicitly requested by the user' },
     { key: 'gmail.send', label: 'gmail.send', description: 'Send email via Gmail' },
-    { key: 'gmail.modify', label: 'gmail.modify', description: 'Modify labels / archive / trash' },
-    { key: 'gmail.drafts', label: 'gmail.drafts', description: 'Create drafts' },
+    { key: 'gmail.drafts', label: 'gmail.drafts', description: 'Create Gmail drafts for review before sending' },
     { key: 'offline_access', label: 'offline_access', description: 'Allow refresh (server-side) so sessions can persist' },
   ].filter((opt) => !requestedSet.has(opt.key));
 
   const upgradeList = upgradeOptions.length
     ? `<fieldset style="margin: 1rem 0; padding: 0.75rem 1rem;">
         <legend><strong>Optional upgrades</strong></legend>
-        <p style="margin-top: 0; color: #444;">You can opt in to additional MCP scopes. These will be added to the authorization request.</p>
+        <p style="margin-top: 0; color: #444;">You can opt in to additional MCP scopes only when the client already requested them. No new scopes beyond the client request will be granted here.</p>
         ${upgradeOptions.map((opt) => `
           <label style="display: block; margin: 0.5rem 0;">
             <input type="checkbox" name="upgrade_scope" value="${htmlEscape(opt.key)}" />
@@ -69,8 +91,9 @@ function renderConsentPage(config: AppConfig, request: ReturnType<typeof parseAu
     <title>Authorize gsuite-mcp-gateway</title>
   </head>
   <body style="font-family: system-ui, sans-serif; max-width: 48rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5;">
-    <h1>Connect Google Calendar and Gmail</h1>
-    <p>ChatGPT is requesting access through <strong>gsuite-mcp-gateway</strong>. Google access tokens and refresh tokens stay server-side in encrypted storage.</p>
+    <h1>Connect Google Workspace</h1>
+    <p>This app is requesting Google access through <strong>gsuite-mcp-gateway</strong>. Google access tokens and refresh tokens stay server-side in encrypted storage.</p>
+    <p>Public information for reviewers and users: <a href="/">home</a> · <a href="/privacy">privacy</a> · <a href="/terms">terms</a> · <a href="/support">support</a> · <a href="/demo">demo</a></p>
     <p><strong>Requested MCP scopes</strong></p>
     <ul>${scopeList}</ul>
     <p><strong>Google scopes that will be requested</strong></p>
@@ -84,6 +107,7 @@ function renderConsentPage(config: AppConfig, request: ReturnType<typeof parseAu
       <input type="hidden" name="code_challenge_method" value="${htmlEscape(request.codeChallengeMethod)}" />
       <input type="hidden" name="resource" value="${htmlEscape(request.resource)}" />
       <input type="hidden" name="scope" value="${htmlEscape(request.scope)}" />
+      ${(request as { grantNamespace?: string }).grantNamespace ? `<input type="hidden" name="grant_namespace" value="${htmlEscape((request as { grantNamespace?: string }).grantNamespace!)}" />` : ''}
       ${upgradeList}
       <input type="hidden" name="csrf_token" value="${htmlEscape(csrfToken)}" />
       <button type="submit" style="padding: 0.75rem 1rem;">Continue to Google</button>
@@ -105,6 +129,7 @@ async function ensureClientExists(db: DbLike, clientId: string, redirectUri: str
 export async function handleAuthorizeGet(request: Request, config: AppConfig, db: DbLike): Promise<Response> {
   const parsed = parseAuthorizationRequest(request, config);
   await ensureClientExists(db, parsed.clientId, parsed.redirectUri);
+  const grantNamespace = validateGrantNamespace(parsed.clientId, parsed.redirectUri, parsed.grantNamespace);
 
   const csrfToken = await createCsrfToken(config.csrfSigningKey, {
     exp: Math.floor(Date.now() / 1000) + 600,
@@ -114,9 +139,10 @@ export async function handleAuthorizeGet(request: Request, config: AppConfig, db
     code_challenge: parsed.codeChallenge,
     resource: parsed.resource,
     base_scope: parsed.scope,
+    grant_namespace: grantNamespace,
   });
 
-  return renderConsentPage(config, parsed, csrfToken);
+  return renderConsentPage(config, grantNamespace ? { ...parsed, grantNamespace } : parsed, csrfToken);
 }
 
 async function parsePostFields(request: Request): Promise<URLSearchParams> {
@@ -137,17 +163,21 @@ async function parsePostFields(request: Request): Promise<URLSearchParams> {
 
 export async function handleAuthorizePost(request: Request, config: AppConfig, db: DbLike): Promise<Response> {
   const fields = await parsePostFields(request);
-  // The consent page allows opt-in scope upgrades. Compute the desired scope first,
-  // then validate the resulting authorization request.
+  // The consent page may only select from the client-requested scopes; it must not widen them.
   const baseScope = fields.get('scope') ?? '';
-  const upgrades = fields.getAll('upgrade_scope').filter((value) => typeof value === 'string');
-  const desiredScope = [baseScope, ...upgrades].join(' ').trim();
-  if (desiredScope && desiredScope !== baseScope) {
+  const normalizedBaseScope = normalizeMcpScope(baseScope);
+  const requestedScopeSet = new Set(normalizedBaseScope.split(' ').filter(Boolean));
+  const upgrades = fields
+    .getAll('upgrade_scope')
+    .filter((value) => typeof value === 'string' && requestedScopeSet.has(value));
+  const desiredScope = normalizeMcpScope([normalizedBaseScope, ...upgrades].join(' ').trim());
+  if (desiredScope !== fields.get('scope')) {
     fields.set('scope', desiredScope);
   }
 
   const parsed = parseAuthorizationForm(fields, config);
   await ensureClientExists(db, parsed.clientId, parsed.redirectUri);
+  const grantNamespace = validateGrantNamespace(parsed.clientId, parsed.redirectUri, parsed.grantNamespace);
 
   const csrfToken = fields.get('csrf_token');
   if (!csrfToken) {
@@ -161,7 +191,8 @@ export async function handleAuthorizePost(request: Request, config: AppConfig, d
     csrfPayload.state !== parsed.state ||
     csrfPayload.code_challenge !== parsed.codeChallenge ||
     csrfPayload.resource !== parsed.resource ||
-    csrfPayload.base_scope !== baseScope
+    csrfPayload.base_scope !== normalizedBaseScope ||
+    csrfPayload.grant_namespace !== grantNamespace
   ) {
     throw new HttpError(400, 'invalid_request', 'CSRF token does not match authorization request');
   }
@@ -177,6 +208,7 @@ export async function handleAuthorizePost(request: Request, config: AppConfig, d
     codeChallengeMethod: parsed.codeChallengeMethod,
     resource: parsed.resource,
     scope: parsed.scope,
+    ...(grantNamespace ? { grantNamespace } : {}),
     createdAt: new Date().toISOString(),
   };
 

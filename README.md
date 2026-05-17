@@ -1,11 +1,11 @@
 # gsuite-mcp-gateway
 
-Cloudflare Worker MCP/OAuth gateway for Google Calendar and Gmail.
+Cloudflare Worker MCP/OAuth gateway for Google Calendar, Google Drive, and Gmail.
 
 `gsuite-mcp-gateway` exposes a remote MCP server over Streamable HTTP from a stateless Cloudflare Worker. It acts as:
 
 - an OAuth authorization server for MCP clients such as ChatGPT or `mcpc`
-- an OAuth client for Google Calendar and Gmail
+- an OAuth client for Google Calendar, Google Drive, and Gmail
 - a broker that keeps Google access/refresh tokens server-side and issues Worker-scoped tokens to MCP clients
 
 ## Features
@@ -18,6 +18,12 @@ Cloudflare Worker MCP/OAuth gateway for Google Calendar and Gmail.
   - list/get events
   - freebusy
   - create/update/delete events
+- Google Drive tools:
+  - list/search files
+  - get metadata
+  - download blob files / export Google Workspace docs
+  - upload small files
+  - delete files
 - Gmail tools:
   - profile
   - labels
@@ -36,6 +42,7 @@ MCP client (ChatGPT / mcpc)
   -> Cloudflare Worker: MCP Streamable HTTP + OAuth server
     -> Google OAuth
       -> Google Calendar API
+      -> Google Drive API
       -> Gmail API
 ```
 
@@ -76,6 +83,14 @@ Key constraints:
 - `gmail_trash_message`
 - `gmail_mark_read_unread`
 
+### Drive
+
+- `drive_list_files`
+- `drive_get_file`
+- `drive_download_file`
+- `drive_upload_file`
+- `drive_delete_file`
+
 ## Local development
 
 Install dependencies:
@@ -111,7 +126,27 @@ npm run smoke:local
 
 For realistic local OAuth debugging against Cloudflare-backed resources/secrets, prefer `wrangler dev --remote` with localhost overrides.
 
-Important: the callback flow now depends on Google OpenID Connect identity resolution. The Worker always requests `openid email` in addition to Calendar/Gmail API scopes and expects `https://openidconnect.googleapis.com/v1/userinfo` to succeed so it can bind grants to Google's stable `sub` identifier.
+Important: the callback flow now depends on Google OpenID Connect identity resolution. The Worker always requests `openid email` in addition to Calendar/Drive/Gmail API scopes and expects `https://openidconnect.googleapis.com/v1/userinfo` to succeed so it can bind grants to Google's stable `sub` identifier.
+
+## Drive behavior
+
+This repo adds a small, MCP-friendly Drive slice:
+
+- `drive.read`
+  - list/search files
+  - fetch metadata
+  - download blob files
+  - export Google Workspace docs when `exportMimeType` is provided
+- `drive.write`
+  - includes `drive.read`
+  - upload small files with metadata
+  - permanently delete files/folders
+
+Notes:
+
+- `drive_download_file` is intentionally sized for MCP/tool responses, not large bulk transfer.
+- Google Workspace-native files (Docs/Sheets/Slides/etc.) require `exportMimeType` because they are exported, not downloaded via `alt=media`.
+- The current upload path is multipart upload for small files.
 
 ## Deploy configuration
 
@@ -204,6 +239,21 @@ For reliable debugging, prefer this pattern:
 - `docs/DEPLOYMENT_RUNBOOK.md`: Cloudflare, D1, secrets, deploy, validation
 - `docs/DECISIONS.md`: architectural decisions
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and requirements
+
+### Google OAuth client quick note
+
+When creating the Google OAuth **Web application** client for this Worker:
+
+- **Authorized JavaScript origins**: usually leave this blank
+- **Authorized redirect URIs**: add the Worker callback URL(s)
+
+Use redirect URIs like:
+
+- local: `http://localhost:8787/oauth/google/callback`
+- workers.dev: `https://YOUR-WORKER.your-subdomain.workers.dev/oauth/google/callback`
+- custom domain: `https://YOUR-DOMAIN/oauth/google/callback`
+
+Do **not** put `/mcp` or the site root here. The exact Google callback endpoint is `/oauth/google/callback`.
 
 ## Publishing and verification notes
 

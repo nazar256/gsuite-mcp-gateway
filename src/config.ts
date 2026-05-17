@@ -29,6 +29,8 @@ export interface Env {
 export const SUPPORTED_MCP_SCOPES = [
   'calendar.read',
   'calendar.write',
+  'drive.read',
+  'drive.write',
   'gmail.read',
   'gmail.send',
   'gmail.modify',

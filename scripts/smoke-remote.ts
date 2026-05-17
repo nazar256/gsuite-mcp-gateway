@@ -13,6 +13,12 @@ interface CheckResult {
   details: string;
 }
 
+async function fetchText(path: string): Promise<{ response: Response; text: string }> {
+  const response = await fetch(new URL(path, baseUrl));
+  const text = await response.text();
+  return { response, text };
+}
+
 async function fetchJson(path: string): Promise<{ response: Response; json: any }> {
   const response = await fetch(new URL(path, baseUrl));
   const json = await response.json().catch(() => undefined);
@@ -21,6 +27,13 @@ async function fetchJson(path: string): Promise<{ response: Response; json: any 
 
 async function main(): Promise<void> {
   const checks: CheckResult[] = [];
+
+  const root = await fetchText('/');
+  checks.push({
+    name: 'Landing page',
+    ok: root.response.ok && root.text.includes('gsuite-mcp-gateway lets a user connect their Google Calendar, Gmail, and Google Drive'),
+    details: `status=${root.response.status}`,
+  });
 
   const resource = await fetchJson('/.well-known/oauth-protected-resource');
   checks.push({

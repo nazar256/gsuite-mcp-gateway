@@ -6,6 +6,19 @@ import { getAuthorizationServerMetadata, getProtectedResourceMetadata, buildWwwA
 import { handleRegister } from './oauth/register';
 import { handleToken } from './oauth/token';
 import { handleMcpRequest, withCors } from './mcp/handler';
+import {
+  finalizeDemoOAuthCallback,
+  handleAccountDisconnect,
+  handleDemoAction,
+  handleDemoConnect,
+  handleDemoOAuthCallback,
+  handleDemoPage,
+  handleDemoStatus,
+  handleLandingPage,
+  handlePrivacyPage,
+  handleSupportPage,
+  handleTermsPage,
+} from './public';
 import { asHttpError } from './security/errors';
 import { redactUrl } from './security/redaction';
 
@@ -52,6 +65,9 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (url.pathname === '/') {
+    if (config && !configError) {
+      return handleLandingPage(config);
+    }
     return serviceInfoResponse(config, configError);
   }
 
@@ -61,6 +77,47 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
 
   if (!config || configError) {
     throw configError ?? new Error('Configuration is invalid');
+  }
+
+  if (request.method === 'GET' && url.pathname === '/privacy') {
+    return handlePrivacyPage(config);
+  }
+
+  if (request.method === 'GET' && url.pathname === '/terms') {
+    return handleTermsPage(config);
+  }
+
+  if (request.method === 'GET' && url.pathname === '/support') {
+    return handleSupportPage(config);
+  }
+
+  if (request.method === 'GET' && url.pathname === '/demo') {
+    return handleDemoPage(request, config, env.DB);
+  }
+
+  if (request.method === 'GET' && url.pathname === '/demo/status') {
+    return handleDemoStatus(request, config, env.DB);
+  }
+
+  if (request.method === 'GET' && url.pathname === '/demo/connect') {
+    return handleDemoConnect(config, env.DB);
+  }
+
+  if (request.method === 'GET' && url.pathname === '/demo/oauth/callback') {
+    const tokenRequestOrResponse = await handleDemoOAuthCallback(request, config);
+    if (tokenRequestOrResponse instanceof Response) {
+      return tokenRequestOrResponse;
+    }
+    const tokenResponse = await handleToken(tokenRequestOrResponse, config, env.DB);
+    return finalizeDemoOAuthCallback(tokenResponse, config);
+  }
+
+  if (request.method === 'POST' && url.pathname.startsWith('/demo/actions/')) {
+    return handleDemoAction(request, config, env.DB, url.pathname.slice('/demo/actions/'.length));
+  }
+
+  if (request.method === 'POST' && url.pathname === '/account/disconnect') {
+    return handleAccountDisconnect(request, config, env.DB);
   }
 
   if (request.method === 'GET' && url.pathname === '/.well-known/oauth-protected-resource') {

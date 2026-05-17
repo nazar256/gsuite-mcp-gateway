@@ -121,6 +121,11 @@ BROWSER="$HOME/.config/opencode/skills/agents-browser-debug/scripts/open-debug-c
 - `GOOGLE_CALENDAR_WRITE_SCOPE_MODE=all` if you need shared-calendar writes
 - `DEFAULT_TIME_ZONE` set to your operator default
 
+Drive-specific validation notes:
+
+- `drive_download_file` is intended for small MCP-friendly transfers, not bulk file syncing.
+- Google Workspace-native files require `exportMimeType` for download/export.
+
 ## 10. Rollout notes
 
 - prefer a custom domain for long-lived production deployments

@@ -16,6 +16,7 @@ gcloud config set project YOUR_PROJECT_ID
 ```bash
 gcloud services enable \
   calendar-json.googleapis.com \
+  drive.googleapis.com \
   gmail.googleapis.com
 ```
 
@@ -33,18 +34,22 @@ In Google Cloud Console:
    - authorized domains (if using a custom production domain)
 3. Add scopes needed by your deployment strategy:
    - Identity (always required by this Worker):
-     - `openid`
-     - `email`
+      - `openid`
+      - `email`
    - Calendar read:
      - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
      - `https://www.googleapis.com/auth/calendar.events.readonly`
      - `https://www.googleapis.com/auth/calendar.events.freebusy`
-   - Calendar write (choose one policy):
-     - `https://www.googleapis.com/auth/calendar.events` for owned + shared calendars
-     - or `https://www.googleapis.com/auth/calendar.events.owned` for owned only
-   - Gmail:
-     - `https://www.googleapis.com/auth/gmail.readonly`
-     - `https://www.googleapis.com/auth/gmail.send`
+    - Calendar write (choose one policy):
+      - `https://www.googleapis.com/auth/calendar.events` for owned + shared calendars
+      - or `https://www.googleapis.com/auth/calendar.events.owned` for owned only
+    - Drive read:
+      - `https://www.googleapis.com/auth/drive.readonly`
+    - Drive write:
+      - `https://www.googleapis.com/auth/drive`
+    - Gmail:
+      - `https://www.googleapis.com/auth/gmail.readonly`
+      - `https://www.googleapis.com/auth/gmail.send`
      - `https://www.googleapis.com/auth/gmail.modify`
      - `https://www.googleapis.com/auth/gmail.compose`
 4. If still in testing mode, add test users.
@@ -53,6 +58,31 @@ In Google Cloud Console:
 
 Create a **Web application** OAuth client.
 
+### What to enter on the “Create OAuth client ID” screen
+
+Use:
+
+- **Application type**: `Web application`
+- **Name**: any descriptive name, for example `gsuite-mcp-gateway`
+
+#### Authorized JavaScript origins
+
+For this project, you will usually leave **Authorized JavaScript origins** empty.
+
+Why:
+
+- This gateway does **not** use browser-side JavaScript to call Google OAuth endpoints directly.
+- The Worker performs server-side OAuth redirects/callback handling instead.
+- Per Google’s client model, **JavaScript origins** are for apps whose frontend JavaScript talks to Google directly from the browser.
+
+Only add JavaScript origins if you intentionally build a separate browser app that will call Google OAuth endpoints from frontend JavaScript.
+
+#### Authorized redirect URIs
+
+This is the important section for this project.
+
+Add the exact callback URL(s) where Google should return the user after consent.
+
 Required redirect URIs:
 
 - local dev:
@@ -60,7 +90,58 @@ Required redirect URIs:
 - deployed Worker:
   - `https://YOUR-WORKER.your-subdomain.workers.dev/oauth/google/callback`
 
-If you use a custom production domain, register that callback instead of the `workers.dev` URL.
+If you use a custom production domain, add that callback too:
+
+- custom production domain:
+  - `https://YOUR-DOMAIN/oauth/google/callback`
+
+Recommended combinations:
+
+- **Local development only**
+  - JavaScript origins: leave blank
+  - Redirect URIs:
+    - `http://localhost:8787/oauth/google/callback`
+
+- **Production on workers.dev**
+  - JavaScript origins: leave blank
+  - Redirect URIs:
+    - `https://YOUR-WORKER.your-subdomain.workers.dev/oauth/google/callback`
+
+- **Both local dev and production**
+  - JavaScript origins: leave blank
+  - Redirect URIs:
+    - `http://localhost:8787/oauth/google/callback`
+    - `https://YOUR-WORKER.your-subdomain.workers.dev/oauth/google/callback`
+
+- **Custom production domain**
+  - JavaScript origins: leave blank
+  - Redirect URIs:
+    - `http://localhost:8787/oauth/google/callback`
+    - `https://YOUR-DOMAIN/oauth/google/callback`
+
+Important rules:
+
+- Redirect URIs must match exactly.
+- Do not add trailing slashes unless your real callback URL has one.
+- Do not put `/mcp` here.
+- Do not put the homepage/root domain here unless your callback actually lives there.
+- The value must be the Google callback endpoint exposed by this Worker: `/oauth/google/callback`.
+
+Examples:
+
+- correct:
+  - `http://localhost:8787/oauth/google/callback`
+  - `https://gsuite-mcp-gateway.example.com/oauth/google/callback`
+- incorrect:
+  - `http://localhost:8787/`
+  - `https://gsuite-mcp-gateway.example.com/`
+  - `https://gsuite-mcp-gateway.example.com/mcp`
+  - `https://gsuite-mcp-gateway.example.com/oauth/google/callback/`
+
+After creation, Google will show:
+
+- **Client ID** → use as `GOOGLE_CLIENT_ID`
+- **Client secret** → use as `GOOGLE_CLIENT_SECRET`
 
 ## 5. Capture the client id and secret
 
@@ -73,7 +154,7 @@ Store them in your secret manager / CI system. Do not commit them.
 
 ## 6. Production-readiness notes
 
-- Gmail scopes are more sensitive than Calendar-only apps and may require Google verification/security review.
+- Drive broad scopes (`drive`, `drive.readonly`) and Gmail scopes are more sensitive than Calendar-only apps and may require Google verification/security review.
 - For internal or limited-rollout use, testing mode plus explicit test users may be enough.
 - For broad public production use, plan for OAuth verification before launch.
 

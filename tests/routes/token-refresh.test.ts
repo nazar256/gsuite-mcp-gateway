@@ -12,7 +12,7 @@ async function completeBaseFlow() {
       access_token: 'google-access',
       refresh_token: 'google-refresh',
       expires_in: 3600,
-      scope: 'https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events.readonly https://www.googleapis.com/auth/calendar.events.freebusy',
+      scope: 'openid email profile https://www.googleapis.com/auth/calendar.events',
       token_type: 'Bearer',
     }),
     'https://openidconnect.googleapis.com/v1/userinfo': jsonResponse({ sub: 'user-1', email: 'me@example.com' }),
@@ -21,7 +21,7 @@ async function completeBaseFlow() {
   const ctx = createWorkerTestContext({ fetch: googleMock.fetch });
   const registration = await registerClient(ctx);
   const clientId = String(registration.json.client_id);
-  const authorizeResponse = await ctx.callWorker(`/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(registration.redirectUri)}&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=S256&resource=${encodeURIComponent('http://localhost:8787/mcp')}&scope=${encodeURIComponent('calendar.read offline_access')}`);
+  const authorizeResponse = await ctx.callWorker(`/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(registration.redirectUri)}&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=S256&resource=${encodeURIComponent('http://localhost:8787/mcp')}&scope=${encodeURIComponent('calendar.write offline_access')}`);
   const html = await authorizeResponse.text();
   const csrf = extractHiddenInput(html, 'csrf_token');
   const continueResponse = await ctx.callWorker('/authorize', {
@@ -34,7 +34,7 @@ async function completeBaseFlow() {
       code_challenge: challenge,
       code_challenge_method: 'S256',
       resource: 'http://localhost:8787/mcp',
-      scope: 'calendar.read offline_access',
+      scope: 'calendar.write offline_access',
       csrf_token: csrf,
     }),
     redirect: 'manual',

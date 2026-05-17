@@ -1,7 +1,6 @@
 import type { AppConfig } from '../config';
 import { buildWwwAuthenticate } from '../oauth/metadata';
 import { hasScope } from '../oauth/scopes';
-import type { SupportedMcpScope } from '../config';
 import { HttpError } from '../security/errors';
 import { verifyWorkerAccessToken } from '../oauth/token';
 import type { DbLike } from '../storage/d1';
@@ -13,7 +12,7 @@ export interface McpAuthContext {
   googleAccessToken: string;
 }
 
-export function unauthorizedResponse(config: AppConfig, scope = 'calendar.read'): Response {
+export function unauthorizedResponse(config: AppConfig, scope = config.supportedScopes[0] ?? 'calendar.write'): Response {
   return new Response(
     JSON.stringify({
       error: 'invalid_token',
@@ -58,7 +57,7 @@ export async function loadMcpAuthContext(request: Request, config: AppConfig, db
   };
 }
 
-export function ensureRequiredScope(config: AppConfig, grantedScope: string, requiredScope: SupportedMcpScope): void {
+export function ensureRequiredScope(config: AppConfig, grantedScope: string, requiredScope: string): void {
   if (!hasScope(grantedScope, requiredScope)) {
     throw new HttpError(403, 'insufficient_scope', `${requiredScope} scope is required`, {
       mcpWwwAuthenticate: [buildWwwAuthenticate(config, requiredScope, 'insufficient_scope', `${requiredScope} scope is required`)],

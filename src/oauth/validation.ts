@@ -13,6 +13,7 @@ export interface OAuthAuthorizationRequest {
   codeChallengeMethod: 'S256';
   resource: string;
   scope: string;
+  grantNamespace?: string;
 }
 
 export interface RegistrationRequest {
@@ -86,6 +87,7 @@ export function parseAuthorizationRequest(request: Request, config: AppConfig): 
 
   try {
     const state = validateOptionalState(url.searchParams.get('state'));
+    const grantNamespace = validateOptionalState(url.searchParams.get('grant_namespace'));
     return {
       responseType: validateResponseType(url.searchParams.get('response_type')),
       clientId: validateClientIdentifier(url.searchParams.get('client_id')),
@@ -95,6 +97,7 @@ export function parseAuthorizationRequest(request: Request, config: AppConfig): 
       codeChallengeMethod: validateCodeChallengeMethod(url.searchParams.get('code_challenge_method')),
       resource: validateResource(url.searchParams.get('resource'), config),
       scope: normalizeMcpScope(url.searchParams.get('scope')),
+      ...(grantNamespace ? { grantNamespace } : {}),
     };
   } catch (error) {
     if (error instanceof HttpError) throw error;
@@ -105,6 +108,7 @@ export function parseAuthorizationRequest(request: Request, config: AppConfig): 
 export function parseAuthorizationForm(fields: URLSearchParams, config: AppConfig): OAuthAuthorizationRequest {
   try {
     const state = validateOptionalState(fields.get('state'));
+    const grantNamespace = validateOptionalState(fields.get('grant_namespace'));
     return {
       responseType: validateResponseType(fields.get('response_type')),
       clientId: validateClientIdentifier(fields.get('client_id')),
@@ -114,6 +118,7 @@ export function parseAuthorizationForm(fields: URLSearchParams, config: AppConfi
       codeChallengeMethod: validateCodeChallengeMethod(fields.get('code_challenge_method')),
       resource: validateResource(fields.get('resource'), config),
       scope: normalizeMcpScope(fields.get('scope')),
+      ...(grantNamespace ? { grantNamespace } : {}),
     };
   } catch (error) {
     if (error instanceof HttpError) throw error;

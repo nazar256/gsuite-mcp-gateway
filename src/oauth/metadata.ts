@@ -6,7 +6,7 @@ export function getProtectedResourceMetadata(config: AppConfig): Record<string, 
     authorization_servers: [config.issuer],
     scopes_supported: [...config.supportedScopes],
     bearer_methods_supported: ['header'],
-    resource_name: 'Google Calendar and Gmail MCP Gateway',
+    resource_name: 'Google Workspace MCP Gateway',
   };
 }
 
@@ -25,6 +25,11 @@ export function getAuthorizationServerMetadata(config: AppConfig): Record<string
   };
 }
 
-export function buildWwwAuthenticate(config: AppConfig, scope = 'calendar.read', error = 'invalid_token', description = 'A valid bearer token is required'): string {
+export function buildWwwAuthenticate(
+  config: AppConfig,
+  scope: string = config.supportedScopes[0] ?? 'calendar.write',
+  error = 'invalid_token',
+  description = 'A valid bearer token is required',
+): string {
   return `Bearer resource_metadata="${config.issuer}/.well-known/oauth-protected-resource", error="${error}", error_description="${description}", scope="${scope}"`;
 }
