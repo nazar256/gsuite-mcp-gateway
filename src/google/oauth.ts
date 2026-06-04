@@ -61,6 +61,7 @@ function addSeconds(secondsFromNow: number): string {
 export function buildGoogleAuthorizationUrl(config: AppConfig, params: {
   state: string;
   googleScopes: string[];
+  requestOfflineAccess?: boolean;
   promptConsent?: boolean;
 }): string {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -68,10 +69,12 @@ export function buildGoogleAuthorizationUrl(config: AppConfig, params: {
   url.searchParams.set('client_id', config.googleClientId);
   url.searchParams.set('redirect_uri', config.googleCallbackUrl);
   url.searchParams.set('scope', params.googleScopes.join(' '));
-  url.searchParams.set('access_type', 'offline');
+  if (params.requestOfflineAccess ?? false) {
+    url.searchParams.set('access_type', 'offline');
+  }
   url.searchParams.set('include_granted_scopes', 'true');
   url.searchParams.set('state', params.state);
-  if (params.promptConsent ?? true) {
+  if (params.promptConsent ?? params.requestOfflineAccess ?? false) {
     url.searchParams.set('prompt', 'consent');
   }
   return url.toString();
@@ -145,10 +148,13 @@ export function createStoredGoogleTokenSet(
   fallbackGoogleScopes: string[],
   identity?: GoogleIdentity,
   existing?: StoredGoogleTokenSet,
+  options?: { allowRefreshToken?: boolean },
 ): StoredGoogleTokenSet {
   const grantedGoogleScopes = googleScopesFromResponse(response, fallbackGoogleScopes);
 
-  const refreshToken = response.refresh_token ?? existing?.refreshToken;
+  const refreshToken = options?.allowRefreshToken === false
+    ? undefined
+    : response.refresh_token ?? existing?.refreshToken;
   const googleSubject = identity?.subject ?? existing?.googleSubject;
 
   return {
@@ -179,12 +185,12 @@ export async function refreshGrantGoogleTokens(
 
   try {
     const refreshed = await refreshGoogleAccessToken(config, tokenSet.refreshToken);
+    const existingGrantScopes = new Set(grant.granted_mcp_scopes.split(' ').filter(Boolean));
     const nextTokenSet = createStoredGoogleTokenSet(refreshed, tokenSet.grantedGoogleScopes, {
       subject: tokenSet.googleSubject ?? grant.subject,
       ...(tokenSet.googleEmail !== undefined ? { email: tokenSet.googleEmail } : {}),
-    }, tokenSet);
+    }, tokenSet, { allowRefreshToken: existingGrantScopes.has('offline_access') });
 
-    const existingGrantScopes = new Set(grant.granted_mcp_scopes.split(' ').filter(Boolean));
     const grantedMcpScopes = inferGrantedMcpScopes(config, nextTokenSet.grantedGoogleScopes)
       .filter((scope) => existingGrantScopes.has(scope));
     if (nextTokenSet.refreshToken && existingGrantScopes.has('offline_access')) {

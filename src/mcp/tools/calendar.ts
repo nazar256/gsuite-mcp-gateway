@@ -157,6 +157,7 @@ export function registerCalendarTools(
     handler: (input: z.infer<z.ZodObject<T>>) => Promise<unknown>,
     readOnlyHint: boolean,
     destructiveHint = false,
+    idempotentHint = readOnlyHint,
   ) => {
     if (!hasScope(grantedScope, scope)) {
       return;
@@ -167,13 +168,13 @@ export function registerCalendarTools(
       description,
       inputSchema,
       outputSchema,
-      annotations: {
-        title: name,
-        readOnlyHint,
-        destructiveHint,
-        idempotentHint: readOnlyHint || !destructiveHint,
-        openWorldHint: false,
-      },
+        annotations: {
+          title: name,
+          readOnlyHint,
+          destructiveHint,
+          idempotentHint,
+          openWorldHint: false,
+        },
       _meta: {
         securitySchemes: [{ type: 'oauth2', scopes: [scope] }],
       },

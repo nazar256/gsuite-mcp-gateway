@@ -84,6 +84,84 @@ async function completeFlow(scope = 'calendar.write gmail.send offline_access') 
   };
 }
 
+async function completeFlowInContext(ctx: ReturnType<typeof createWorkerTestContext>, scope: string, subject = 'google-user-123') {
+  const verifier = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~a';
+  const challenge = await createS256CodeChallenge(verifier);
+  const googleScopesByRequestedScope: Record<string, string> = {
+    'calendar.write': 'https://www.googleapis.com/auth/calendar.events',
+    'drive.read': 'https://www.googleapis.com/auth/drive',
+    'drive.write': 'https://www.googleapis.com/auth/drive',
+    'gmail.read': 'https://www.googleapis.com/auth/gmail.modify',
+    'gmail.send': 'https://www.googleapis.com/auth/gmail.send',
+    'gmail.modify': 'https://www.googleapis.com/auth/gmail.modify',
+    'gmail.drafts': 'https://www.googleapis.com/auth/gmail.compose',
+  };
+  const googleScopeSet = new Set(['openid', 'email', 'profile']);
+  for (const requestedScope of scope.split(' ').filter(Boolean)) {
+    const googleScope = googleScopesByRequestedScope[requestedScope];
+    if (googleScope) {
+      googleScopeSet.add(googleScope);
+    }
+  }
+
+  ctx.env.fetch = createGoogleFetchMock({
+    'https://oauth2.googleapis.com/token': jsonResponse({
+      access_token: 'google-access',
+      refresh_token: 'google-refresh',
+      expires_in: 3600,
+      scope: [...googleScopeSet].join(' '),
+      token_type: 'Bearer',
+    }),
+    'https://openidconnect.googleapis.com/v1/userinfo': jsonResponse({
+      sub: subject,
+      email: 'me@example.com',
+    }),
+  }).fetch;
+
+  const registration = await registerClient(ctx);
+  const clientId = String(registration.json.client_id);
+
+  const authorizeResponse = await ctx.callWorker(`/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(registration.redirectUri)}&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=S256&resource=${encodeURIComponent('http://localhost:8787/mcp')}&scope=${encodeURIComponent(scope)}`);
+  const csrfToken = extractHiddenInput(await authorizeResponse.text(), 'csrf_token');
+  const postAuthorize = await ctx.callWorker('/authorize', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      response_type: 'code',
+      client_id: clientId,
+      redirect_uri: registration.redirectUri,
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      resource: 'http://localhost:8787/mcp',
+      scope,
+      csrf_token: csrfToken,
+    }),
+    redirect: 'manual',
+  });
+
+  const state = new URL(postAuthorize.headers.get('location')!).searchParams.get('state')!;
+  const callbackResponse = await ctx.callWorker(`/oauth/google/callback?state=${encodeURIComponent(state)}&code=google-auth-code-${encodeURIComponent(scope)}`, { redirect: 'manual' });
+  const authCode = new URL(callbackResponse.headers.get('location')!).searchParams.get('code')!;
+  const tokenResponse = await ctx.callWorker('/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: authCode,
+      client_id: clientId,
+      redirect_uri: registration.redirectUri,
+      code_verifier: verifier,
+      resource: 'http://localhost:8787/mcp',
+    }),
+  });
+
+  return {
+    ctx,
+    token: String((await tokenResponse.json() as Record<string, unknown>).access_token),
+    clientId,
+  };
+}
+
 async function listToolNames(ctx: ReturnType<typeof createWorkerTestContext>, token: string): Promise<string[]> {
   const response = await ctx.callWorker('/mcp', {
     method: 'POST',
@@ -142,5 +220,32 @@ describe('mcp auth and tool registration', () => {
       'gmail_modify_message_labels',
       'gmail_create_draft',
     ]));
+  });
+
+  it('does not silently broaden an existing access token after the stored grant widens', async () => {
+    const ctx = createWorkerTestContext();
+    const initial = await completeFlowInContext(ctx, 'calendar.write offline_access');
+    const initialTools = await listToolNames(ctx, initial.token);
+    expect(initialTools).toContain('calendar_create_event');
+    expect(initialTools).not.toContain('drive_list_files');
+
+    await completeFlowInContext(ctx, 'calendar.write drive.write offline_access');
+
+    const afterWidenTools = await listToolNames(ctx, initial.token);
+    expect(afterWidenTools).toContain('calendar_create_event');
+    expect(afterWidenTools).not.toContain('drive_list_files');
+  });
+
+  it('marks non-destructive writes as non-idempotent and reply tool advertises both scopes', () => {
+    const server = createGatewayMcpServer(parseConfig(createTestEnv()), {
+      googleAccessToken: 'token-1',
+      grantedScope: 'gmail.read gmail.send gmail.modify gmail.drafts calendar.write drive.write',
+    });
+
+    const tools = (server as any)._registeredTools ?? {};
+    expect(tools.calendar_create_event?.annotations?.idempotentHint).toBe(false);
+    expect(tools.drive_upload_file?.annotations?.idempotentHint).toBe(false);
+    expect(tools.gmail_send_email?.annotations?.idempotentHint).toBe(false);
+    expect(tools.gmail_reply_to_message?._meta?.securitySchemes?.[0]?.scopes).toEqual(['gmail.read', 'gmail.send']);
   });
 });

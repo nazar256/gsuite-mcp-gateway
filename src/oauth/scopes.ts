@@ -132,6 +132,14 @@ export function normalizeMcpScope(scope?: string | null): string {
   return ordered.join(' ');
 }
 
+export function validateRequestedMcpScope(scope?: string | null): string {
+  if (!scope || !scope.trim()) {
+    throw new HttpError(400, 'invalid_scope', 'scope is required');
+  }
+
+  return normalizeMcpScope(scope);
+}
+
 export function hasScope(scope: string | undefined, requiredScope: string): boolean {
   if (!scope) return false;
   return normalizeMcpScope(scope).split(' ').includes(requiredScope);
@@ -143,6 +151,21 @@ export function normalizeGrantedMcpScope(scope?: string | null): string {
   }
 
   return normalizeMcpScope(scope);
+}
+
+export function intersectMcpScopes(...scopes: Array<string | null | undefined>): string {
+  const provided = scopes.filter((scope): scope is string => scope !== null && scope !== undefined);
+  if (provided.length === 0) {
+    return '';
+  }
+
+  const normalized = provided.map((scope) => normalizeGrantedMcpScope(scope));
+  if (normalized.some((scope) => scope.length === 0)) {
+    return '';
+  }
+
+  const sets = normalized.map((scope) => new Set(scope.split(' ').filter(Boolean)));
+  return canonicalScopeOrder.filter((scope) => sets.every((set) => set.has(scope))).join(' ');
 }
 
 export function getRequiredGoogleScopes(config: AppConfig, mcpScope: string): string[] {

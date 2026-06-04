@@ -166,6 +166,9 @@ async function parsePostFields(request: Request): Promise<URLSearchParams> {
 export async function handleAuthorizePost(request: Request, config: AppConfig, db: DbLike): Promise<Response> {
   const fields = await parsePostFields(request);
   const baseScope = fields.get('scope') ?? '';
+  if (!baseScope.trim()) {
+    throw new HttpError(400, 'invalid_scope', 'scope is required');
+  }
   const normalizedBaseScope = normalizeMcpScope(baseScope);
   const allowedUpgradeScopes = new Set<string>(AUTHORIZATION_UPGRADES.map((opt) => opt.key));
   const upgrades = fields
@@ -227,6 +230,7 @@ export async function handleAuthorizePost(request: Request, config: AppConfig, d
   const redirectUrl = buildGoogleAuthorizationUrl(config, {
     state: stateId,
     googleScopes,
+    requestOfflineAccess: parsed.scope.split(' ').includes('offline_access'),
     promptConsent: true,
   });
 

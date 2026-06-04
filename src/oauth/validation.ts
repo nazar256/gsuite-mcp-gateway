@@ -1,7 +1,7 @@
 import type { AppConfig } from '../config';
 import { matchesPattern } from '../config';
 import { HttpError } from '../security/errors';
-import { normalizeMcpScope } from './scopes';
+import { validateRequestedMcpScope } from './scopes';
 import { validateCodeChallenge, validateCodeChallengeMethod } from './pkce';
 
 export interface OAuthAuthorizationRequest {
@@ -101,7 +101,7 @@ export function parseAuthorizationRequest(request: Request, config: AppConfig): 
       codeChallenge: validateCodeChallenge(url.searchParams.get('code_challenge')),
       codeChallengeMethod: validateCodeChallengeMethod(url.searchParams.get('code_challenge_method')),
       resource: validateResource(url.searchParams.get('resource'), config),
-      scope: normalizeMcpScope(url.searchParams.get('scope')),
+      scope: validateRequestedMcpScope(url.searchParams.get('scope')),
       ...(grantNamespace ? { grantNamespace } : {}),
     };
   } catch (error) {
@@ -122,7 +122,7 @@ export function parseAuthorizationForm(fields: URLSearchParams, config: AppConfi
       codeChallenge: validateCodeChallenge(fields.get('code_challenge')),
       codeChallengeMethod: validateCodeChallengeMethod(fields.get('code_challenge_method')),
       resource: validateResource(fields.get('resource'), config),
-      scope: normalizeMcpScope(fields.get('scope')),
+      scope: validateRequestedMcpScope(fields.get('scope')),
       ...(grantNamespace ? { grantNamespace } : {}),
     };
   } catch (error) {

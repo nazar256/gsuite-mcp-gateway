@@ -53,8 +53,14 @@ export async function handleGoogleCallback(request: Request, config: AppConfig, 
     const existingTokenSet = existingGrant
       ? await decryptStoredGoogleTokenSet(config, existingGrant)
       : undefined;
-    const tokenSet = createStoredGoogleTokenSet(googleTokenResponse, requestedGoogleScopes, identity, existingTokenSet);
     const requestedMcpScopes = new Set(validatedStatePayload.scope.split(' ').filter(Boolean));
+    const tokenSet = createStoredGoogleTokenSet(
+      googleTokenResponse,
+      requestedGoogleScopes,
+      identity,
+      existingTokenSet,
+      { allowRefreshToken: requestedMcpScopes.has('offline_access') },
+    );
     const grantedMcpScopes = inferGrantedMcpScopes(config, tokenSet.grantedGoogleScopes)
       .filter((scope) => requestedMcpScopes.has(scope));
     if (tokenSet.refreshToken && requestedMcpScopes.has('offline_access')) {

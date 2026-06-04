@@ -15,6 +15,18 @@ describe('google oauth helpers', () => {
     expect(url.origin).toBe('https://accounts.google.com');
     expect(url.searchParams.get('state')).toBe('state123');
     expect(url.searchParams.get('scope')).toBe('email openid scope:a scope:b');
+    expect(url.searchParams.get('access_type')).toBeNull();
+  });
+
+  it('requests offline google access only when asked', () => {
+    const url = new URL(buildGoogleAuthorizationUrl(config, {
+      state: 'state123',
+      googleScopes: ['email', 'openid'],
+      requestOfflineAccess: true,
+    }));
+
+    expect(url.searchParams.get('access_type')).toBe('offline');
+    expect(url.searchParams.get('prompt')).toBe('consent');
   });
 
   it('merges stored token state', () => {

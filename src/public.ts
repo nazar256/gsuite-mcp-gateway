@@ -6,6 +6,7 @@ import { createGoogleGmailClient } from './google/gmail';
 import { decryptStoredGoogleTokenSet } from './google/oauth';
 import { buildMimeMessage, encodeMimeMessage } from './google/mime';
 import { createS256CodeChallenge } from './oauth/pkce';
+import { randomOpaqueToken } from './security/crypto';
 import { HttpError } from './security/errors';
 import { signJwt, verifyJwt } from './security/jwt';
 import { deleteGrant, getGrantBaseSubject, getGrantById, revokeGrant } from './storage/grants';
@@ -14,9 +15,10 @@ import { getOAuthClient, upsertOAuthClient } from './storage/clients';
 const PROJECT_REPO_URL = 'https://github.com/nazar256/gsuite-mcp-gateway';
 const PROJECT_ISSUES_URL = 'https://github.com/nazar256/gsuite-mcp-gateway/issues';
 const DEMO_CLIENT_ID = 'self-hosted-demo';
-const DEMO_CODE_VERIFIER = 'self-hosted-demo-pkce-verifier-string-1234567890ABCDE';
 const DEMO_COOKIE_NAME = 'gsmcp_demo';
 const DEMO_COOKIE_AUD = 'reviewer-demo-session';
+const DEMO_PKCE_COOKIE_NAME = 'gsmcp_demo_pkce';
+const DEMO_PKCE_COOKIE_AUD = 'reviewer-demo-pkce';
 const DEMO_GRANT_NAMESPACE = 'demo';
 const DEMO_EVENT_SUMMARY = 'gsuite-mcp-gateway self-hosted smoke test';
 const DEMO_DRIVE_FILE_NAME = 'gsuite-mcp-gateway self-hosted smoke test.txt';
@@ -39,6 +41,15 @@ interface DemoStatus {
   subject?: string;
   email?: string | null;
   hasRefreshToken?: boolean;
+}
+
+interface DemoPkceClaims {
+  iss: string;
+  aud: string;
+  typ: 'demo_pkce';
+  verifier: string;
+  iat: number;
+  exp: number;
 }
 
 function htmlEscape(value: string): string {
@@ -89,24 +100,22 @@ function pageShell(config: AppConfig, title: string, pathname: string, body: str
 }
 
 function jsonResponse(body: unknown, status = 200, headers?: HeadersInit): Response {
+  const responseHeaders = new Headers(headers);
+  responseHeaders.set('content-type', 'application/json; charset=utf-8');
+  responseHeaders.set('cache-control', 'no-store');
   return new Response(JSON.stringify(body, null, 2), {
     status,
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-store',
-      ...(headers ? Object.fromEntries(new Headers(headers).entries()) : {}),
-    },
+    headers: responseHeaders,
   });
 }
 
 function redirectResponse(location: string, headers?: HeadersInit): Response {
+  const responseHeaders = new Headers(headers);
+  responseHeaders.set('location', location);
+  responseHeaders.set('cache-control', 'no-store');
   return new Response(null, {
     status: 302,
-    headers: {
-      location,
-      'cache-control': 'no-store',
-      ...(headers ? Object.fromEntries(new Headers(headers).entries()) : {}),
-    },
+    headers: responseHeaders,
   });
 }
 
@@ -150,6 +159,47 @@ async function createDemoSessionCookieForClaims(
 function clearDemoSessionCookie(config: AppConfig): string {
   const secure = config.issuerUrl.protocol === 'https:' ? '; Secure' : '';
   return `${DEMO_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=0`;
+}
+
+async function createDemoPkceCookie(config: AppConfig, verifier: string): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const token = await signJwt({
+    iss: config.issuer,
+    aud: DEMO_PKCE_COOKIE_AUD,
+    typ: 'demo_pkce',
+    verifier,
+    iat: now,
+    exp: now + 10 * 60,
+  } as Record<string, unknown>, config.jwtSigningKey, 'demo+pkce+jwt');
+  const secure = config.issuerUrl.protocol === 'https:' ? '; Secure' : '';
+  return `${DEMO_PKCE_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/demo/oauth/callback; HttpOnly; SameSite=Lax${secure}; Max-Age=600`;
+}
+
+function clearDemoPkceCookie(config: AppConfig): string {
+  const secure = config.issuerUrl.protocol === 'https:' ? '; Secure' : '';
+  return `${DEMO_PKCE_COOKIE_NAME}=; Path=/demo/oauth/callback; HttpOnly; SameSite=Lax${secure}; Max-Age=0`;
+}
+
+async function getDemoPkceVerifier(request: Request, config: AppConfig): Promise<string> {
+  const cookies = parseCookies(request.headers.get('cookie'));
+  const token = cookies[DEMO_PKCE_COOKIE_NAME];
+  if (!token) {
+    throw new HttpError(400, 'invalid_request', 'Demo PKCE verifier is missing');
+  }
+
+  const claims = await verifyJwt<Record<string, unknown> & DemoPkceClaims>(token, config.jwtSigningKey, {
+    issuer: config.issuer,
+    audience: DEMO_PKCE_COOKIE_AUD,
+    typ: 'demo_pkce',
+    status: 400,
+    code: 'invalid_request',
+    message: 'Demo PKCE verifier is invalid',
+  });
+  if (typeof claims.verifier !== 'string' || !claims.verifier) {
+    throw new HttpError(400, 'invalid_request', 'Demo PKCE verifier is invalid');
+  }
+
+  return claims.verifier;
 }
 
 async function getDemoGrant(request: Request, config: AppConfig, db: DbLike) {
@@ -365,7 +415,8 @@ export async function handleDemoStatus(request: Request, config: AppConfig, db: 
 
 export async function handleDemoConnect(config: AppConfig, db: DbLike): Promise<Response> {
   await ensureDemoClient(config, db);
-  const codeChallenge = await createS256CodeChallenge(DEMO_CODE_VERIFIER);
+  const codeVerifier = randomOpaqueToken(48);
+  const codeChallenge = await createS256CodeChallenge(codeVerifier);
   const url = new URL('/authorize', config.issuer);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', DEMO_CLIENT_ID);
@@ -375,29 +426,34 @@ export async function handleDemoConnect(config: AppConfig, db: DbLike): Promise<
   url.searchParams.set('resource', config.mcpResource);
   url.searchParams.set('scope', 'calendar.write drive.write gmail.send gmail.drafts offline_access');
   url.searchParams.set('grant_namespace', DEMO_GRANT_NAMESPACE);
-  return redirectResponse(url.toString());
+  return redirectResponse(url.toString(), {
+    'set-cookie': await createDemoPkceCookie(config, codeVerifier),
+  });
 }
 
 export async function handleDemoOAuthCallback(request: Request, config: AppConfig): Promise<Request | Response> {
   const url = new URL(request.url);
   if (url.searchParams.get('error')) {
-    return buildFlashRedirect('/demo', `Google OAuth failed: ${url.searchParams.get('error')}`);
+    return buildFlashRedirect('/demo', `Google OAuth failed: ${url.searchParams.get('error')}`, {
+      'set-cookie': clearDemoPkceCookie(config),
+    });
   }
   const code = url.searchParams.get('code');
   if (!code) {
     throw new HttpError(400, 'invalid_request', 'Missing authorization code');
   }
+  const codeVerifier = await getDemoPkceVerifier(request, config);
   const tokenRequest = new Request(`${config.issuer}/token`, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      client_id: DEMO_CLIENT_ID,
-      redirect_uri: `${config.issuer}/demo/oauth/callback`,
-      code_verifier: DEMO_CODE_VERIFIER,
-      resource: config.mcpResource,
-    }),
+        grant_type: 'authorization_code',
+        code,
+        client_id: DEMO_CLIENT_ID,
+        redirect_uri: `${config.issuer}/demo/oauth/callback`,
+        code_verifier: codeVerifier,
+        resource: config.mcpResource,
+      }),
   });
   return tokenRequest;
 }
@@ -405,7 +461,9 @@ export async function handleDemoOAuthCallback(request: Request, config: AppConfi
 export async function finalizeDemoOAuthCallback(tokenResponse: Response, config: AppConfig): Promise<Response> {
   const body = await tokenResponse.clone().json().catch(() => undefined) as Record<string, unknown> | undefined;
   if (!tokenResponse.ok || !body || typeof body.access_token !== 'string') {
-    return buildFlashRedirect('/demo', `Demo OAuth exchange failed${body?.error_description ? `: ${String(body.error_description)}` : ''}`);
+    return buildFlashRedirect('/demo', `Demo OAuth exchange failed${body?.error_description ? `: ${String(body.error_description)}` : ''}`, {
+      'set-cookie': clearDemoPkceCookie(config),
+    });
   }
 
   const accessToken = body.access_token;
@@ -420,9 +478,10 @@ export async function finalizeDemoOAuthCallback(tokenResponse: Response, config:
     throw new HttpError(500, 'internal_error', 'Demo access token did not include a grant id');
   }
 
-  return buildFlashRedirect('/demo', 'Google account connected for self-hosted smoke test.', {
-    'set-cookie': await createDemoSessionCookie(config, grantId),
-  });
+  const headers = new Headers();
+  headers.append('set-cookie', await createDemoSessionCookie(config, grantId));
+  headers.append('set-cookie', clearDemoPkceCookie(config));
+  return buildFlashRedirect('/demo', 'Google account connected for self-hosted smoke test.', headers);
 }
 
 async function createCalendarEvent(request: Request, config: AppConfig, db: DbLike): Promise<Record<string, unknown>> {

@@ -6,6 +6,8 @@ import { restoreTime, useFixedTime } from '../helpers/time';
 import { createS256CodeChallenge } from '../../src/oauth/pkce';
 import { getGrantBySubject, getGrantBySubjectNamespace } from '../../src/storage/grants';
 import { upsertOAuthClient } from '../../src/storage/clients';
+import { parseConfig } from '../../src/config';
+import { decryptStoredGoogleTokenSet } from '../../src/google/oauth';
 
 describe('oauth flow', () => {
   beforeEach(() => {
@@ -278,5 +280,85 @@ describe('oauth flow', () => {
     expect(normalGrant).not.toBeNull();
     expect(demoGrant).not.toBeNull();
     expect(normalGrant?.grant_id).not.toBe(demoGrant?.grant_id);
+  });
+
+  it('requires explicit scope on authorize', async () => {
+    const ctx = createWorkerTestContext();
+    const registration = await registerClient(ctx);
+    const clientId = String(registration.json.client_id);
+
+    const response = await ctx.callWorker(`/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(registration.redirectUri)}&code_challenge=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~a&code_challenge_method=S256&resource=${encodeURIComponent('http://localhost:8787/mcp')}`);
+    const body = await response.json() as Record<string, unknown>;
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('invalid_scope');
+  });
+
+  it('does not request or persist google refresh tokens when offline_access is absent', async () => {
+    const verifier = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~a';
+    const challenge = await createS256CodeChallenge(verifier);
+    const googleMock = createGoogleFetchMock({
+      'https://oauth2.googleapis.com/token': jsonResponse({
+        access_token: 'google-access',
+        refresh_token: 'google-refresh-should-not-be-kept',
+        expires_in: 3600,
+        scope: 'openid email profile https://www.googleapis.com/auth/calendar.events',
+        token_type: 'Bearer',
+      }),
+      'https://openidconnect.googleapis.com/v1/userinfo': jsonResponse({
+        sub: 'google-user-123',
+        email: 'me@example.com',
+      }),
+    });
+
+    const ctx = createWorkerTestContext({ fetch: googleMock.fetch });
+    const registration = await registerClient(ctx);
+    const clientId = String(registration.json.client_id);
+    const authorizeResponse = await ctx.callWorker(`/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(registration.redirectUri)}&state=abc123&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=S256&resource=${encodeURIComponent('http://localhost:8787/mcp')}&scope=${encodeURIComponent('calendar.write')}`);
+    const authorizeHtml = await authorizeResponse.text();
+    const csrfToken = extractHiddenInput(authorizeHtml, 'csrf_token');
+
+    const postAuthorize = await ctx.callWorker('/authorize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        response_type: 'code',
+        client_id: clientId,
+        redirect_uri: registration.redirectUri,
+        state: 'abc123',
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
+        resource: 'http://localhost:8787/mcp',
+        scope: 'calendar.write',
+        csrf_token: csrfToken,
+      }),
+      redirect: 'manual',
+    });
+    const googleRedirect = new URL(postAuthorize.headers.get('location')!);
+    expect(googleRedirect.searchParams.get('access_type')).toBeNull();
+
+    const state = googleRedirect.searchParams.get('state');
+    await ctx.callWorker(`/oauth/google/callback?state=${encodeURIComponent(state!)}&code=google-auth-code`, { redirect: 'manual' });
+
+    const config = parseConfig(ctx.env);
+    const grant = await getGrantBySubject(ctx.db, 'google-user-123');
+    expect(grant).not.toBeNull();
+    const tokenSet = await decryptStoredGoogleTokenSet(config, grant!);
+    expect(tokenSet.refreshToken).toBeUndefined();
+  });
+
+  it('uses per-flow demo pkce cookies instead of a static verifier', async () => {
+    const googleMock = createGoogleFetchMock({});
+    const ctx = createWorkerTestContext({ fetch: googleMock.fetch });
+
+    const connectResponse = await ctx.callWorker('/demo/connect', {
+      redirect: 'manual',
+    });
+    const location = new URL(connectResponse.headers.get('location')!);
+    const setCookie = connectResponse.headers.get('set-cookie') ?? '';
+    expect(connectResponse.status).toBe(302);
+    expect(setCookie).toContain('gsmcp_demo_pkce=');
+    expect(location.searchParams.get('code_challenge')).toBeTruthy();
+    expect(location.searchParams.get('code_challenge')).not.toContain('self-hosted-demo');
   });
 });
