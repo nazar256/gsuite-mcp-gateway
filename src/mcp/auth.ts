@@ -1,6 +1,6 @@
 import type { AppConfig } from '../config';
 import { buildWwwAuthenticate } from '../oauth/metadata';
-import { hasScope } from '../oauth/scopes';
+import { hasScope, intersectMcpScopes } from '../oauth/scopes';
 import { HttpError } from '../security/errors';
 import { verifyWorkerAccessToken } from '../oauth/token';
 import type { DbLike } from '../storage/d1';
@@ -57,10 +57,11 @@ export async function loadMcpAuthContext(request: Request, config: AppConfig, db
 
   const accessTokenClaims = await verifyWorkerAccessToken(token, config);
   const { grant, tokenSet } = await loadFreshGoogleTokenSet(db, config, accessTokenClaims.grant_id);
+  const grantedScope = intersectMcpScopes(accessTokenClaims.scope, grant.granted_mcp_scopes);
 
   return {
     accessTokenClaims,
-    grantedScope: grant.granted_mcp_scopes,
+    grantedScope,
     googleAccessToken: tokenSet.accessToken,
   };
 }

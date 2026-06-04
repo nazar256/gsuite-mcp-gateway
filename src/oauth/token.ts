@@ -9,6 +9,7 @@ import { decryptStoredGoogleTokenSet } from '../google/oauth';
 import { validateCodeVerifier, createS256CodeChallenge } from './pkce';
 import type { AuthorizationCodePayload, WorkerAccessTokenClaims, WorkerRefreshTokenClaims } from './types';
 import { getOAuthClient } from '../storage/clients';
+import { intersectMcpScopes } from './scopes';
 
 async function parseTokenFields(request: Request): Promise<URLSearchParams> {
   const contentType = request.headers.get('content-type') ?? '';
@@ -122,7 +123,12 @@ async function handleAuthorizationCodeGrant(fields: URLSearchParams, config: App
     throw new HttpError(400, 'invalid_grant', 'Authorization code resource does not match');
   }
 
-  const verifier = validateCodeVerifier(codeVerifier);
+  let verifier: string;
+  try {
+    verifier = validateCodeVerifier(codeVerifier);
+  } catch {
+    throw new HttpError(400, 'invalid_request', 'code_verifier is invalid');
+  }
   const expectedChallenge = await createS256CodeChallenge(verifier);
   if (payload.codeChallengeMethod !== 'S256' || payload.codeChallenge !== expectedChallenge) {
     console.warn('pkce_verification_failed', {
@@ -130,8 +136,6 @@ async function handleAuthorizationCodeGrant(fields: URLSearchParams, config: App
       redirect_uri: redirectUri,
       code_hash: codeHash,
       method: payload.codeChallengeMethod,
-      stored_challenge_prefix: payload.codeChallenge.slice(0, 12),
-      expected_challenge_prefix: expectedChallenge.slice(0, 12),
     });
     throw new HttpError(400, 'invalid_grant', 'PKCE verification failed');
   }
@@ -207,7 +211,10 @@ async function handleRefreshTokenGrant(fields: URLSearchParams, config: AppConfi
     throw new HttpError(400, 'invalid_grant', 'Grant is no longer active');
   }
 
-  const currentScope = grant.granted_mcp_scopes;
+  const currentScope = intersectMcpScopes(claims.scope, grant.granted_mcp_scopes);
+  if (!currentScope) {
+    throw new HttpError(400, 'invalid_grant', 'Refresh token no longer grants any active scope');
+  }
 
   const access = await issueAccessToken(config, {
     sub: claims.sub,

@@ -129,6 +129,8 @@ export function registerGmailTools(
     handler: (input: z.infer<z.ZodObject<T>>) => Promise<unknown>,
     readOnlyHint: boolean,
     destructiveHint = false,
+    idempotentHint = readOnlyHint,
+    advertisedScopes: Array<'gmail.read' | 'gmail.send' | 'gmail.modify' | 'gmail.drafts'> = [scope],
   ) => {
     if (!hasScope(grantedScope, scope)) {
       return;
@@ -139,16 +141,16 @@ export function registerGmailTools(
       description,
       inputSchema,
       outputSchema,
-      annotations: {
-        title: name,
-        readOnlyHint,
-        destructiveHint,
-        idempotentHint: readOnlyHint || !destructiveHint,
-        openWorldHint: false,
-      },
-      _meta: {
-        securitySchemes: [{ type: 'oauth2', scopes: [scope] }],
-      },
+        annotations: {
+          title: name,
+          readOnlyHint,
+          destructiveHint,
+          idempotentHint,
+          openWorldHint: false,
+        },
+        _meta: {
+          securitySchemes: [{ type: 'oauth2', scopes: advertisedScopes }],
+        },
     }, async (args: z.infer<z.ZodObject<T>>) => {
       try {
         ensureRequiredScope(config, grantedScope, scope);
@@ -265,7 +267,7 @@ export function registerGmailTools(
         references,
       }));
       return client.sendMessage(raw, original.threadId);
-    }, false);
+    }, false, false, false, ['gmail.read', 'gmail.send']);
   }
 
   register('gmail_modify_message_labels', 'gmail.modify', 'Add or remove Gmail labels from a message.', {

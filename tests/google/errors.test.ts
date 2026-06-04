@@ -18,6 +18,7 @@ describe('google error mapping', () => {
     await expect(expectGoogleJson(response)).rejects.toMatchObject({
       status: 403,
       code: 'google_api_error',
+      message: 'Google API request failed',
     });
   });
 
@@ -37,6 +38,7 @@ describe('google error mapping', () => {
     await expect(expectGoogleJson(response)).rejects.toMatchObject({
       status: 403,
       code: 'insufficient_scope',
+      message: 'Google rejected this request because the granted permissions are insufficient',
     });
   });
 });

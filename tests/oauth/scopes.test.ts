@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createTestEnv } from '../helpers/env';
 import { parseConfig } from '../../src/config';
-import { getRequiredGoogleScopes, hasScope, inferGrantedMcpScopes, normalizeGrantedMcpScope, normalizeMcpScope } from '../../src/oauth/scopes';
+import { getRequiredGoogleScopes, hasScope, inferGrantedMcpScopes, intersectMcpScopes, normalizeGrantedMcpScope, normalizeMcpScope, validateRequestedMcpScope } from '../../src/oauth/scopes';
 
 describe('oauth scopes', () => {
   it('normalizes supported scope order', () => {
@@ -91,5 +91,12 @@ describe('oauth scopes', () => {
     expect(normalizeGrantedMcpScope('')).toBe('');
     expect(normalizeGrantedMcpScope(undefined)).toBe('');
     expect(hasScope('', 'calendar.write')).toBe(false);
+  });
+
+  it('rejects blank requested scopes and can intersect granted scopes', () => {
+    expect(() => validateRequestedMcpScope('')).toThrow('scope is required');
+    expect(intersectMcpScopes('calendar.read calendar.write drive.read drive.write', 'calendar.read calendar.write')).toBe('calendar.read calendar.write');
+    expect(intersectMcpScopes('gmail.send', 'calendar.read')).toBe('');
+    expect(intersectMcpScopes('calendar.write', '')).toBe('');
   });
 });

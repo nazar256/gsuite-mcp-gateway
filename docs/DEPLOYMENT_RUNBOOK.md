@@ -46,7 +46,9 @@ printf '%s' 'YOUR_GOOGLE_CLIENT_ID' | npx wrangler secret put GOOGLE_CLIENT_ID
 printf '%s' 'YOUR_GOOGLE_CLIENT_SECRET' | npx wrangler secret put GOOGLE_CLIENT_SECRET
 ```
 
-If you plan to use ChatGPT or `mcpc`, include the callback/origin patterns you need in your private `wrangler.toml` allowlists.
+If you plan to use ChatGPT, `mcpc`, or another client, include only the exact callback/origin patterns you need in your private `wrangler.toml` allowlists.
+
+Do not keep broad localhost entries in production by default. Add loopback callbacks or origins only when you intentionally need a deployed worker to talk to a local client during development or testing.
 
 ## 5. Run checks
 

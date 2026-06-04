@@ -148,6 +148,8 @@ Required Worker secrets:
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 
+Production allowlists should contain only the exact callback/origin patterns you intend to trust for that deployment. Add localhost loopback callbacks or browser origins only when you intentionally need a deployed worker to talk to a local client during development.
+
 ## Secret handling policy
 
 - Do **not** write locally generated Worker secrets to disk.

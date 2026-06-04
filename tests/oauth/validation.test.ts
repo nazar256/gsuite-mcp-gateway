@@ -28,6 +28,11 @@ describe('oauth validation', () => {
     expect(parsed.state).toBe('xyz');
   });
 
+  it('rejects authorization requests without explicit scope', () => {
+    const request = new Request('http://localhost:8787/authorize?response_type=code&client_id=test&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fconnector%2Foauth%2Fabc&code_challenge=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~a&code_challenge_method=S256&resource=http%3A%2F%2Flocalhost%3A8787%2Fmcp');
+    expect(() => parseAuthorizationRequest(request, config)).toThrow('scope is required');
+  });
+
   it('parses registration request', () => {
     const parsed = parseRegistrationRequest({
       redirect_uris: ['https://chatgpt.com/connector/oauth/abc'],
