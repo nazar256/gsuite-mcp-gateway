@@ -8,6 +8,9 @@ import { hasScope } from '../../oauth/scopes';
 import { HttpError } from '../../security/errors';
 import { ensureRequiredScope } from '../auth';
 
+const textDecoder = new TextDecoder();
+const MAX_MESSAGE_BODY_BYTES = 5 * 1024 * 1024;
+
 const gmailProfileOutput = z.object({
   emailAddress: z.string().optional(),
   messagesTotal: z.number().optional(),
@@ -67,6 +70,24 @@ const gmailMessageOutput = z.object({
   payload: gmailMessagePartOutput.optional(),
   sizeEstimate: z.number().optional(),
   raw: z.string().optional(),
+  body: z.object({
+    contentFormat: z.enum(['decoded', 'sanitized']),
+    bytes: z.number(),
+    truncated: z.boolean(),
+    textPlain: z.string().optional(),
+    textHtml: z.string().optional(),
+    sanitizedText: z.string().optional(),
+    links: z.array(z.object({
+      url: z.string(),
+      text: z.string().optional(),
+    })).optional(),
+    parts: z.array(z.object({
+      partId: z.string().optional(),
+      mimeType: z.string().optional(),
+      filename: z.string().optional(),
+      bytes: z.number(),
+    })).optional(),
+  }).passthrough().optional(),
 }).passthrough();
 const gmailDraftOutput = z.object({
   id: z.string().optional(),
@@ -92,7 +113,7 @@ function getHeaderValue(payload: any, name: string): string | undefined {
   return payload?.headers?.find((header: any) => header.name?.toLowerCase() === name.toLowerCase())?.value;
 }
 
-function buildMetadataHeaderParams(format: 'metadata' | 'full' | 'minimal', metadataHeaders?: string[]): Record<string, string | string[]> {
+function buildMetadataHeaderParams(format: 'metadata' | 'full' | 'minimal' | 'raw', metadataHeaders?: string[]): Record<string, string | string[]> {
   const params: Record<string, string | string[]> = { format };
   if (metadataHeaders?.length) {
     params.metadataHeaders = metadataHeaders;
@@ -112,6 +133,188 @@ function summarizeMessage(message: any) {
     to: getHeaderValue(message.payload, 'To'),
     date: getHeaderValue(message.payload, 'Date'),
   };
+}
+
+function decodeBase64Url(value: string): Uint8Array {
+  try {
+    const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), '=');
+    const decoded = atob(padded);
+    return Uint8Array.from(decoded, (char) => char.charCodeAt(0));
+  } catch {
+    throw new HttpError(400, 'invalid_request', 'Gmail message body contains invalid base64url data');
+  }
+}
+
+function collectTextParts(part: any, parts: Array<{ partId?: string; mimeType?: string; filename?: string; text: string; bytes: number }>): void {
+  const mimeType = String(part?.mimeType ?? '').toLowerCase();
+  const data = part?.body?.data;
+  if ((mimeType === 'text/plain' || mimeType === 'text/html') && typeof data === 'string') {
+    const bytes = decodeBase64Url(data);
+    parts.push({
+      partId: part.partId,
+      mimeType,
+      filename: part.filename,
+      text: textDecoder.decode(bytes),
+      bytes: bytes.byteLength,
+    });
+  }
+
+  for (const child of part?.parts ?? []) {
+    collectTextParts(child, parts);
+  }
+}
+
+function limitTextByBytes(value: string, remainingBytes: number): { text: string; bytes: number; truncated: boolean } {
+  if (remainingBytes <= 0) {
+    return { text: '', bytes: 0, truncated: value.length > 0 };
+  }
+
+  const bytes = new TextEncoder().encode(value);
+  if (bytes.byteLength <= remainingBytes) {
+    return { text: value, bytes: bytes.byteLength, truncated: false };
+  }
+
+  return {
+    text: textDecoder.decode(bytes.slice(0, remainingBytes)),
+    bytes: remainingBytes,
+    truncated: true,
+  };
+}
+
+function decodeHtmlEntity(entity: string): string {
+  const namedEntities: Record<string, string> = {
+    amp: '&',
+    apos: '\'',
+    gt: '>',
+    lt: '<',
+    nbsp: ' ',
+    quot: '"',
+  };
+  if (entity.startsWith('#x') || entity.startsWith('#X')) {
+    const codePoint = Number.parseInt(entity.slice(2), 16);
+    return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : `&${entity};`;
+  }
+  if (entity.startsWith('#')) {
+    const codePoint = Number.parseInt(entity.slice(1), 10);
+    return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : `&${entity};`;
+  }
+  return namedEntities[entity] ?? `&${entity};`;
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&([a-zA-Z][a-zA-Z0-9]+|#[0-9]+|#x[0-9a-fA-F]+);/g, (_match, entity: string) => decodeHtmlEntity(entity));
+}
+
+function normalizeWhitespace(value: string): string {
+  return value
+    .replace(/\r\n/g, '\n')
+    .replace(/[\t\f\v ]+/g, ' ')
+    .replace(/ *\n+ */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function isSafeLink(url: string): boolean {
+  const normalized = url.trim().toLowerCase();
+  return normalized.startsWith('http://') || normalized.startsWith('https://') || normalized.startsWith('mailto:');
+}
+
+function addUniqueLink(links: Array<{ url: string; text?: string }>, seen: Set<string>, url: string, text?: string): void {
+  const decodedUrl = decodeHtmlEntities(url).trim();
+  if (!decodedUrl || !isSafeLink(decodedUrl) || seen.has(decodedUrl)) {
+    return;
+  }
+  seen.add(decodedUrl);
+  const normalizedText = text ? normalizeWhitespace(decodeHtmlEntities(text.replace(/<[^>]*>/g, ' '))) : undefined;
+  links.push({ url: decodedUrl, ...(normalizedText ? { text: normalizedText } : {}) });
+}
+
+function sanitizeHtml(html: string): { text: string; links: Array<{ url: string; text?: string }> } {
+  const links: Array<{ url: string; text?: string }> = [];
+  const seen = new Set<string>();
+  const withoutUnsafeBlocks = html
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<\s*(script|style|noscript|template|svg|head)\b[\s\S]*?<\s*\/\s*\1\s*>/gi, ' ')
+    .replace(/<\s*(script|style|noscript|template|svg|head)\b[\s\S]*$/gi, ' ');
+
+  const withLinkText = withoutUnsafeBlocks.replace(/<a\b[^>]*\bhref\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\s*\/\s*a\s*>/gi, (_match, _raw, doubleQuoted: string | undefined, singleQuoted: string | undefined, bare: string | undefined, label: string) => {
+    const url = doubleQuoted ?? singleQuoted ?? bare ?? '';
+    addUniqueLink(links, seen, url, label);
+    return `${label} (${url})`;
+  });
+
+  const text = normalizeWhitespace(decodeHtmlEntities(withLinkText
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\s*\/\s*(p|div|li|tr|h[1-6])\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')));
+
+  for (const match of text.matchAll(/https?:\/\/[^\s<>()"']+/gi)) {
+    addUniqueLink(links, seen, match[0].replace(/[.,;:!?]+$/, ''));
+  }
+
+  return { text, links };
+}
+
+function stripPayloadBodyData(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stripPayloadBodyData);
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (key === 'data') {
+      continue;
+    }
+    result[key] = stripPayloadBodyData(entry);
+  }
+  return result;
+}
+
+function buildMessageBody(message: any, bodyFormat: 'decoded' | 'sanitized', maxBodyBytes: number) {
+  const textParts: Array<{ partId?: string; mimeType?: string; filename?: string; text: string; bytes: number }> = [];
+  collectTextParts(message.payload, textParts);
+
+  const textPlain = textParts.filter((part) => part.mimeType === 'text/plain').map((part) => part.text).join('\n\n');
+  const textHtml = textParts.filter((part) => part.mimeType === 'text/html').map((part) => part.text).join('\n\n');
+
+  let remainingBytes = maxBodyBytes;
+  let truncated = false;
+  const output: Record<string, unknown> = {
+    contentFormat: bodyFormat,
+    bytes: textParts.reduce((total, part) => total + part.bytes, 0),
+    truncated: false,
+    parts: textParts.map(({ partId, mimeType, filename, bytes }) => ({ partId, mimeType, filename, bytes })),
+  };
+
+  if (bodyFormat === 'decoded') {
+    if (textPlain) {
+      const limited = limitTextByBytes(textPlain, remainingBytes);
+      output.textPlain = limited.text;
+      remainingBytes -= limited.bytes;
+      truncated ||= limited.truncated;
+    }
+    if (textHtml && remainingBytes > 0) {
+      const limited = limitTextByBytes(textHtml, remainingBytes);
+      output.textHtml = limited.text;
+      remainingBytes -= limited.bytes;
+      truncated ||= limited.truncated;
+    } else if (textHtml) {
+      truncated = true;
+    }
+  } else {
+    const source = sanitizeHtml(textHtml || textPlain);
+    const limited = limitTextByBytes(source.text, remainingBytes);
+    output.sanitizedText = limited.text;
+    output.links = source.links;
+    truncated ||= limited.truncated;
+  }
+
+  output.truncated = truncated;
+  return output;
 }
 
 export function registerGmailTools(
@@ -193,13 +396,28 @@ export function registerGmailTools(
     return { resultSizeEstimate: list.resultSizeEstimate, messages };
   }, true);
 
-  register('gmail_get_message', 'gmail.read', 'Get one Gmail message by id.', {
+  register('gmail_get_message', 'gmail.read', 'Get one Gmail message by id. Use bodyFormat="sanitized" to return readable body text plus extracted links without Gmail base64 MIME blobs.', {
     id: z.string().min(1),
-    format: z.enum(['metadata', 'full', 'minimal']).default('metadata').optional(),
+    format: z.enum(['metadata', 'full', 'minimal', 'raw']).default('metadata').optional(),
     metadataHeaders: z.array(z.string().min(1).max(100)).max(25).optional(),
-  }, gmailMessageOutput, async ({ id, format = 'metadata', metadataHeaders }) => {
-    const params = buildMetadataHeaderParams(format, metadataHeaders);
-    return client.getMessage(id, params);
+    bodyFormat: z.enum(['none', 'decoded', 'sanitized']).default('none').optional(),
+    includePayloadData: z.boolean().optional(),
+    maxBodyBytes: z.number().int().min(1).max(MAX_MESSAGE_BODY_BYTES).default(1024 * 1024).optional(),
+  }, gmailMessageOutput, async ({ id, format = 'metadata', metadataHeaders, bodyFormat = 'none', includePayloadData, maxBodyBytes = 1024 * 1024 }) => {
+    const effectiveFormat = bodyFormat === 'none' ? format : 'full';
+    const params = buildMetadataHeaderParams(effectiveFormat, metadataHeaders);
+    const message = await client.getMessage(id, params) as any;
+
+    if (bodyFormat === 'none') {
+      return message;
+    }
+
+    const shouldIncludePayloadData = includePayloadData ?? false;
+    return {
+      ...message,
+      ...(shouldIncludePayloadData ? {} : { payload: stripPayloadBodyData(message.payload) }),
+      body: buildMessageBody(message, bodyFormat, maxBodyBytes),
+    };
   }, true);
 
   register('gmail_create_draft', 'gmail.drafts', 'Create a Gmail draft.', {
