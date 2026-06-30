@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { CallToolResult, ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 import type { AppConfig } from '../../config';
 import type { GoogleGmailClient } from '../../google/gmail';
 import { buildMimeMessage, encodeMimeMessage, extractEmailAddress } from '../../google/mime';
@@ -10,6 +10,8 @@ import { ensureRequiredScope } from '../auth';
 
 const textDecoder = new TextDecoder();
 const MAX_MESSAGE_BODY_BYTES = 5 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const DEFAULT_ATTACHMENT_BYTES = 1024 * 1024;
 
 const gmailProfileOutput = z.object({
   emailAddress: z.string().optional(),
@@ -60,6 +62,16 @@ const gmailMessagePartOutput: z.ZodTypeAny = z.lazy(() => z.object({
   body: gmailMessagePartBodyOutput.optional(),
   parts: z.array(gmailMessagePartOutput).optional(),
 }).passthrough());
+const gmailAttachmentMetadataOutput = z.object({
+  partId: z.string().optional(),
+  attachmentId: z.string(),
+  filename: z.string().optional(),
+  mimeType: z.string().optional(),
+  size: z.number().optional(),
+  disposition: z.string().optional(),
+  contentDisposition: z.string().optional(),
+  contentId: z.string().optional(),
+}).passthrough();
 const gmailMessageOutput = z.object({
   id: z.string().optional(),
   threadId: z.string().optional(),
@@ -67,7 +79,12 @@ const gmailMessageOutput = z.object({
   snippet: z.string().optional(),
   historyId: z.string().optional(),
   internalDate: z.string().optional(),
+  subject: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  date: z.string().optional(),
   payload: gmailMessagePartOutput.optional(),
+  attachments: z.array(gmailAttachmentMetadataOutput).optional(),
   sizeEstimate: z.number().optional(),
   raw: z.string().optional(),
   body: z.object({
@@ -88,6 +105,54 @@ const gmailMessageOutput = z.object({
       bytes: z.number(),
     })).optional(),
   }).passthrough().optional(),
+}).passthrough();
+const gmailAttachmentOutput = z.object({
+  messageId: z.string(),
+  attachmentId: z.string(),
+  partId: z.string().optional(),
+  filename: z.string().optional(),
+  mimeType: z.string().optional(),
+  size: z.number().optional(),
+  disposition: z.string().optional(),
+  contentDisposition: z.string().optional(),
+  contentId: z.string().optional(),
+  encoding: z.enum(['base64', 'text']),
+  outputMode: z.enum(['base64', 'text']),
+  bytes: z.number(),
+  truncated: z.boolean(),
+  sha256: z.string().optional(),
+  sha256Full: z.string().optional(),
+  sha256Returned: z.string().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  data: z.string(),
+}).passthrough();
+const gmailReadAttachmentOutput = z.object({
+  messageId: z.string(),
+  attachmentId: z.string(),
+  partId: z.string().optional(),
+  filename: z.string().optional(),
+  mimeType: z.string().optional(),
+  size: z.number().optional(),
+  disposition: z.string().optional(),
+  contentDisposition: z.string().optional(),
+  contentId: z.string().optional(),
+  mode: z.enum(['auto', 'metadata', 'text', 'native', 'raw']),
+  representation: z.enum(['metadata', 'text', 'image', 'audio', 'resource_link', 'raw']),
+  resourceUri: z.string(),
+  bytes: z.number(),
+  bytesReturned: z.number().optional(),
+  bytesTotal: z.number().optional(),
+  truncated: z.boolean(),
+  sha256: z.string().optional(),
+  sha256Full: z.string().optional(),
+  sha256Returned: z.string().optional(),
+  text: z.string().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  textExtracted: z.boolean().optional(),
+  renderedPages: z.array(z.number()).optional(),
+  limitations: z.array(z.string()).optional(),
 }).passthrough();
 const gmailDraftOutput = z.object({
   id: z.string().optional(),
@@ -135,15 +200,501 @@ function summarizeMessage(message: any) {
   };
 }
 
-function decodeBase64Url(value: string): Uint8Array {
+function compactMessage(message: any) {
+  const attachments = collectAttachmentParts(message.payload);
+  return {
+    ...summarizeMessage(message),
+    historyId: message.historyId,
+    ...(attachments.length ? { attachments } : {}),
+    sizeEstimate: message.sizeEstimate,
+  };
+}
+
+function decodeBase64Url(value: string, context = 'Gmail message body'): Uint8Array {
   try {
     const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
     const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), '=');
     const decoded = atob(padded);
     return Uint8Array.from(decoded, (char) => char.charCodeAt(0));
   } catch {
-    throw new HttpError(400, 'invalid_request', 'Gmail message body contains invalid base64url data');
+    throw new HttpError(400, 'invalid_request', `${context} contains invalid base64url data`);
   }
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
+    const chunk = bytes.slice(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function decodeBase64(value: string, context = 'Attachment data'): Uint8Array {
+  try {
+    const decoded = atob(value);
+    return Uint8Array.from(decoded, (char) => char.charCodeAt(0));
+  } catch {
+    throw new HttpError(400, 'invalid_request', `${context} contains invalid base64 data`);
+  }
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function parseHeaderSize(value: string | undefined): number | undefined {
+  const match = value?.match(/(?:^|;\s*)size=(\d+)(?:;|$)/i);
+  if (!match) {
+    return undefined;
+  }
+  const size = Number.parseInt(match[1]!, 10);
+  return Number.isSafeInteger(size) ? size : undefined;
+}
+
+function parseContentDisposition(value: string | undefined): string | undefined {
+  const disposition = value?.split(';', 1)[0]?.trim().toLowerCase();
+  return disposition || undefined;
+}
+
+function findAttachmentPart(part: any, attachmentId: string): any | undefined {
+  if (part?.body?.attachmentId === attachmentId) {
+    return part;
+  }
+  for (const child of part?.parts ?? []) {
+    const found = findAttachmentPart(child, attachmentId);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
+type GmailAttachmentMetadata = {
+  partId?: string;
+  attachmentId: string;
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+  disposition?: string;
+  contentDisposition?: string;
+  contentId?: string;
+};
+
+function attachmentMetadataFromPart(part: any): GmailAttachmentMetadata | undefined {
+  const attachmentId = part?.body?.attachmentId;
+  if (typeof attachmentId !== 'string' || !attachmentId) {
+    return undefined;
+  }
+
+  const contentDisposition = getHeaderValue(part, 'Content-Disposition');
+  const contentId = getHeaderValue(part, 'Content-ID');
+  const bodySize = typeof part.body?.size === 'number' ? part.body.size : undefined;
+  const headerSize = parseHeaderSize(contentDisposition);
+  const disposition = parseContentDisposition(contentDisposition);
+
+  return {
+    attachmentId,
+    ...(part.partId ? { partId: part.partId } : {}),
+    ...(part.filename ? { filename: part.filename } : {}),
+    ...(part.mimeType ? { mimeType: part.mimeType } : {}),
+    ...(bodySize !== undefined ? { size: bodySize } : {}),
+    ...(bodySize === undefined && headerSize !== undefined ? { size: headerSize } : {}),
+    ...(contentDisposition ? { contentDisposition } : {}),
+    ...(disposition ? { disposition } : {}),
+    ...(contentId ? { contentId } : {}),
+  };
+}
+
+function collectAttachmentParts(part: any, attachments: GmailAttachmentMetadata[] = []): GmailAttachmentMetadata[] {
+  const metadata = attachmentMetadataFromPart(part);
+  if (metadata) {
+    attachments.push(metadata);
+  }
+  for (const child of part?.parts ?? []) {
+    collectAttachmentParts(child, attachments);
+  }
+  return attachments;
+}
+
+function attachmentMetadataFromMessage(message: any, attachmentId: string): Partial<GmailAttachmentMetadata> {
+  const part = findAttachmentPart(message?.payload, attachmentId);
+  if (!part) {
+    return {};
+  }
+  return attachmentMetadataFromPart(part) ?? {};
+}
+
+function isTextLikeMimeType(mimeType: string | undefined): boolean {
+  const normalized = mimeType?.toLowerCase();
+  return Boolean(normalized && (
+    normalized.startsWith('text/')
+    || normalized === 'application/json'
+    || normalized === 'application/xml'
+    || normalized === 'application/xhtml+xml'
+    || normalized === 'application/javascript'
+    || normalized === 'application/x-javascript'
+    || normalized === 'image/svg+xml'
+    || normalized.endsWith('+json')
+    || normalized.endsWith('+xml')
+  ));
+}
+
+function isImageMimeType(mimeType: string | undefined): boolean {
+  const normalized = mimeType?.toLowerCase();
+  return normalized === 'image/png'
+    || normalized === 'image/jpeg'
+    || normalized === 'image/jpg'
+    || normalized === 'image/webp'
+    || normalized === 'image/gif';
+}
+
+function isAudioMimeType(mimeType: string | undefined): boolean {
+  return Boolean(mimeType?.toLowerCase().startsWith('audio/'));
+}
+
+function isPdfMimeType(mimeType: string | undefined): boolean {
+  return mimeType?.toLowerCase() === 'application/pdf';
+}
+
+function readUint32BE(bytes: Uint8Array, offset: number): number {
+  return ((bytes[offset]! << 24) >>> 0)
+    + (bytes[offset + 1]! << 16)
+    + (bytes[offset + 2]! << 8)
+    + bytes[offset + 3]!;
+}
+
+function imageDimensions(bytes: Uint8Array, mimeType: string | undefined): { width: number; height: number } | undefined {
+  const normalized = mimeType?.toLowerCase();
+  if (normalized === 'image/png' && bytes.byteLength >= 24
+    && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+    && bytes[12] === 0x49 && bytes[13] === 0x48 && bytes[14] === 0x44 && bytes[15] === 0x52) {
+    return {
+      width: readUint32BE(bytes, 16),
+      height: readUint32BE(bytes, 20),
+    };
+  }
+
+  if ((normalized === 'image/jpeg' || normalized === 'image/jpg') && bytes.byteLength >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < bytes.byteLength) {
+      if (bytes[offset] !== 0xff) {
+        offset += 1;
+        continue;
+      }
+      const marker = bytes[offset + 1]!;
+      const segmentLength = (bytes[offset + 2]! << 8) + bytes[offset + 3]!;
+      if (segmentLength < 2) {
+        return undefined;
+      }
+      if ((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7) || (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf)) {
+        return {
+          height: (bytes[offset + 5]! << 8) + bytes[offset + 6]!,
+          width: (bytes[offset + 7]! << 8) + bytes[offset + 8]!,
+        };
+      }
+      offset += 2 + segmentLength;
+    }
+  }
+
+  return undefined;
+}
+
+async function buildAttachmentResponse(input: {
+  messageId: string;
+  attachmentId: string;
+  partId?: string;
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+  contentDisposition?: string;
+  contentId?: string;
+  disposition?: string;
+  outputMode: 'base64' | 'text';
+  maxBytes: number;
+}, attachment: any) {
+  if (typeof attachment?.data !== 'string') {
+    throw new HttpError(400, 'invalid_request', 'Gmail attachment response is missing base64url data');
+  }
+
+  const decoded = decodeBase64Url(attachment.data, 'Gmail attachment');
+  if (input.outputMode === 'text' && !isTextLikeMimeType(input.mimeType)) {
+    throw new HttpError(400, 'invalid_request', `outputMode="text" decodes raw bytes and is only supported for text-like attachments; use outputMode="base64" for ${input.mimeType ?? 'binary attachments'}`);
+  }
+
+  const truncated = decoded.byteLength > input.maxBytes;
+  const bytes = truncated ? decoded.slice(0, input.maxBytes) : decoded;
+  const size = input.size ?? (typeof attachment.size === 'number' ? attachment.size : undefined);
+  const sha256Full = await sha256Hex(decoded);
+  const sha256Returned = truncated ? await sha256Hex(bytes) : sha256Full;
+  const dimensions = imageDimensions(bytes, input.mimeType);
+
+  return {
+    messageId: input.messageId,
+    attachmentId: input.attachmentId,
+    ...(input.partId ? { partId: input.partId } : {}),
+    ...(input.filename ? { filename: input.filename } : {}),
+    ...(input.mimeType ? { mimeType: input.mimeType } : {}),
+    ...(size !== undefined ? { size } : {}),
+    ...(input.disposition ? { disposition: input.disposition } : {}),
+    ...(input.contentDisposition ? { contentDisposition: input.contentDisposition } : {}),
+    ...(input.contentId ? { contentId: input.contentId } : {}),
+    encoding: input.outputMode,
+    outputMode: input.outputMode,
+    bytes: bytes.byteLength,
+    truncated,
+    sha256: sha256Returned,
+    sha256Full,
+    sha256Returned,
+    ...(dimensions ? dimensions : {}),
+    data: input.outputMode === 'text' ? textDecoder.decode(bytes) : encodeBase64(bytes),
+  };
+}
+
+async function downloadAttachment(input: {
+  messageId: string;
+  attachmentId: string;
+  filename?: string | undefined;
+  mimeType?: string | undefined;
+  size?: number | undefined;
+  contentDisposition?: string | undefined;
+  contentId?: string | undefined;
+  disposition?: string | undefined;
+  outputMode?: 'base64' | 'text' | undefined;
+  encoding?: 'base64' | 'text' | undefined;
+  maxBytes?: number | undefined;
+}, client: GoogleGmailClient) {
+  const attachment = await client.getAttachment(input.messageId, input.attachmentId);
+  const needsMessageMetadata = !input.filename || !input.mimeType || input.size === undefined || !input.contentDisposition || !input.contentId || !input.disposition;
+  let messageMetadata: Partial<GmailAttachmentMetadata> = {};
+  if (needsMessageMetadata) {
+    try {
+      messageMetadata = attachmentMetadataFromMessage(
+        await client.getMessage(input.messageId, buildMetadataHeaderParams('full')) as any,
+        input.attachmentId,
+      );
+    } catch {
+      messageMetadata = {};
+    }
+  }
+  const filename = input.filename ?? messageMetadata.filename;
+  const mimeType = input.mimeType ?? messageMetadata.mimeType;
+  const size = input.size ?? messageMetadata.size;
+  const outputMode = input.outputMode ?? input.encoding ?? 'base64';
+
+  return buildAttachmentResponse({
+    messageId: input.messageId,
+    attachmentId: input.attachmentId,
+    ...(messageMetadata.partId ? { partId: messageMetadata.partId } : {}),
+    ...(filename ? { filename } : {}),
+    ...(mimeType ? { mimeType } : {}),
+    ...(size !== undefined ? { size } : {}),
+    ...(input.disposition ?? messageMetadata.disposition ? { disposition: input.disposition ?? messageMetadata.disposition } : {}),
+    ...(input.contentDisposition ?? messageMetadata.contentDisposition ? { contentDisposition: input.contentDisposition ?? messageMetadata.contentDisposition } : {}),
+    ...(input.contentId ?? messageMetadata.contentId ? { contentId: input.contentId ?? messageMetadata.contentId } : {}),
+    outputMode,
+    maxBytes: input.maxBytes ?? 1024 * 1024,
+  }, attachment);
+}
+
+function gmailAttachmentResourceUri(messageId: string, attachmentId: string): string {
+  return `gmail://messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`;
+}
+
+function metadataFromDownloadedAttachment(downloaded: Record<string, unknown>, mode: 'auto' | 'metadata' | 'text' | 'native' | 'raw', representation: 'metadata' | 'text' | 'image' | 'audio' | 'resource_link' | 'raw', resourceUri: string, extra: Record<string, unknown> = {}) {
+  const { data: _data, encoding: _encoding, outputMode: _outputMode, ...metadata } = downloaded;
+  const bytesReturned = typeof metadata.bytes === 'number' ? metadata.bytes : undefined;
+  const bytesTotal = typeof metadata.size === 'number' ? metadata.size : bytesReturned;
+  return {
+    ...metadata,
+    ...(bytesReturned !== undefined ? { bytesReturned } : {}),
+    ...(bytesTotal !== undefined ? { bytesTotal } : {}),
+    mode,
+    representation,
+    resourceUri,
+    ...extra,
+  };
+}
+
+function attachmentDisplayName(downloaded: Record<string, unknown>): string {
+  return typeof downloaded.filename === 'string' && downloaded.filename
+    ? downloaded.filename
+    : typeof downloaded.attachmentId === 'string'
+      ? downloaded.attachmentId
+      : 'Gmail attachment';
+}
+
+function resourceLink(downloaded: Record<string, unknown>, resourceUri: string, description: string): ContentBlock {
+  return {
+    type: 'resource_link',
+    uri: resourceUri,
+    name: attachmentDisplayName(downloaded),
+    ...(typeof downloaded.mimeType === 'string' ? { mimeType: downloaded.mimeType } : {}),
+    ...(typeof downloaded.size === 'number' ? { size: downloaded.size } : {}),
+    description,
+  };
+}
+
+async function readAttachment(input: {
+  messageId: string;
+  attachmentId: string;
+  filename?: string | undefined;
+  mimeType?: string | undefined;
+  size?: number | undefined;
+  contentDisposition?: string | undefined;
+  contentId?: string | undefined;
+  disposition?: string | undefined;
+  mode?: 'auto' | 'metadata' | 'text' | 'native' | 'raw' | undefined;
+  maxBytes?: number | undefined;
+}, client: GoogleGmailClient): Promise<CallToolResult> {
+  const mode = input.mode ?? 'auto';
+  const resourceUri = gmailAttachmentResourceUri(input.messageId, input.attachmentId);
+
+  if (mode === 'metadata') {
+    const downloaded = await downloadAttachment({ ...input, outputMode: 'base64', maxBytes: 1 }, client) as Record<string, unknown>;
+    const metadata = metadataFromDownloadedAttachment(downloaded, mode, 'metadata', resourceUri);
+    return {
+      content: [{ type: 'text', text: JSON.stringify(metadata, null, 2) }],
+      structuredContent: metadata,
+    };
+  }
+
+  if (mode === 'raw') {
+    const downloaded = await downloadAttachment({ ...input, outputMode: 'base64', maxBytes: input.maxBytes ?? DEFAULT_ATTACHMENT_BYTES }, client) as Record<string, unknown>;
+    const metadata = metadataFromDownloadedAttachment(downloaded, mode, 'raw', resourceUri);
+    return {
+      content: [{ type: 'text', text: JSON.stringify(downloaded, null, 2) }],
+      structuredContent: metadata,
+    };
+  }
+
+  if (mode === 'text') {
+    const downloaded = await downloadAttachment({ ...input, outputMode: 'text', maxBytes: input.maxBytes ?? DEFAULT_ATTACHMENT_BYTES }, client) as Record<string, unknown>;
+    const text = String(downloaded.data ?? '');
+    const metadata = metadataFromDownloadedAttachment(downloaded, mode, 'text', resourceUri, { text });
+    return {
+      content: [{ type: 'text', text }],
+      structuredContent: metadata,
+    };
+  }
+
+  const downloaded = await downloadAttachment({ ...input, outputMode: 'base64', maxBytes: input.maxBytes ?? DEFAULT_ATTACHMENT_BYTES }, client) as Record<string, unknown>;
+  const mimeType = typeof downloaded.mimeType === 'string' ? downloaded.mimeType : undefined;
+  const data = String(downloaded.data ?? '');
+
+  if (isTextLikeMimeType(mimeType)) {
+    const bytes = decodeBase64(data);
+    const text = textDecoder.decode(bytes);
+    const metadata = metadataFromDownloadedAttachment(downloaded, mode, 'text', resourceUri, { text });
+    return {
+      content: [{ type: 'text', text }],
+      structuredContent: metadata,
+    };
+  }
+
+  if (isImageMimeType(mimeType)) {
+    const imageMimeType = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType ?? 'image/png';
+    const metadata = metadataFromDownloadedAttachment(downloaded, mode, 'image', resourceUri);
+    return {
+      content: [{
+        type: 'image',
+        data,
+        mimeType: imageMimeType,
+        annotations: { audience: ['assistant'], priority: 1 },
+      }],
+      structuredContent: metadata,
+    };
+  }
+
+  if (isAudioMimeType(mimeType)) {
+    const audioMimeType = mimeType ?? 'audio/mpeg';
+    const metadata = metadataFromDownloadedAttachment(downloaded, mode, 'audio', resourceUri);
+    return {
+      content: [{
+        type: 'audio',
+        data,
+        mimeType: audioMimeType,
+        annotations: { audience: ['assistant'], priority: 1 },
+      }],
+      structuredContent: metadata,
+    };
+  }
+
+  if (isPdfMimeType(mimeType)) {
+    const limitations = [
+      'PDF text extraction, page rendering, and OCR are not available in this Worker build.',
+      'Use the resource link to fetch the original PDF bytes in clients that can render or inspect PDFs.',
+    ];
+    const metadata = metadataFromDownloadedAttachment(downloaded, mode, 'resource_link', resourceUri, {
+      textExtracted: false,
+      renderedPages: [],
+      limitations,
+    });
+    return {
+      content: [
+        { type: 'text', text: `PDF attachment "${attachmentDisplayName(downloaded)}" is available as an MCP resource. ${limitations[0]}` },
+        resourceLink(downloaded, resourceUri, 'Original PDF attachment'),
+      ],
+      structuredContent: metadata,
+    };
+  }
+
+  const metadata = metadataFromDownloadedAttachment(downloaded, mode, 'resource_link', resourceUri, {
+    limitations: ['This binary MIME type is not directly model-visible; fetch the linked MCP resource for the original bytes.'],
+  });
+  return {
+    content: [
+      { type: 'text', text: `Attachment "${attachmentDisplayName(downloaded)}" is available as an MCP resource; MIME type ${mimeType ?? 'unknown'} is not directly model-visible.` },
+      resourceLink(downloaded, resourceUri, 'Original Gmail attachment'),
+    ],
+    structuredContent: metadata,
+  };
+}
+
+function registerGmailAttachmentResources(server: McpServer, client: GoogleGmailClient): void {
+  server.registerResource(
+    'gmail_attachment',
+    new ResourceTemplate('gmail://messages/{messageId}/attachments/{attachmentId}', { list: undefined }),
+    {
+      title: 'Gmail attachment',
+      description: 'Read a Gmail attachment by message id and attachment id.',
+    },
+    async (uri, variables) => {
+      const messageId = decodeURIComponent(String(variables.messageId));
+      const attachmentId = decodeURIComponent(String(variables.attachmentId));
+      const downloaded = await downloadAttachment({
+        messageId,
+        attachmentId,
+        outputMode: 'base64',
+        maxBytes: MAX_ATTACHMENT_BYTES,
+      }, client) as Record<string, unknown>;
+      const mimeType = typeof downloaded.mimeType === 'string' ? downloaded.mimeType : undefined;
+      const data = String(downloaded.data ?? '');
+
+      if (isTextLikeMimeType(mimeType)) {
+        return {
+          contents: [{
+            uri: uri.toString(),
+            mimeType,
+            text: textDecoder.decode(decodeBase64(data)),
+          }],
+        };
+      }
+
+      return {
+        contents: [{
+          uri: uri.toString(),
+          ...(mimeType ? { mimeType } : {}),
+          blob: data,
+        }],
+      };
+    },
+  );
 }
 
 function collectTextParts(part: any, parts: Array<{ partId?: string; mimeType?: string; filename?: string; text: string; bytes: number }>): void {
@@ -256,24 +807,6 @@ function sanitizeHtml(html: string): { text: string; links: Array<{ url: string;
   return { text, links };
 }
 
-function stripPayloadBodyData(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stripPayloadBodyData);
-  }
-  if (!value || typeof value !== 'object') {
-    return value;
-  }
-
-  const result: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (key === 'data') {
-      continue;
-    }
-    result[key] = stripPayloadBodyData(entry);
-  }
-  return result;
-}
-
 function buildMessageBody(message: any, bodyFormat: 'decoded' | 'sanitized', maxBodyBytes: number) {
   const textParts: Array<{ partId?: string; mimeType?: string; filename?: string; text: string; bytes: number }> = [];
   collectTextParts(message.payload, textParts);
@@ -334,6 +867,7 @@ export function registerGmailTools(
     destructiveHint = false,
     idempotentHint = readOnlyHint,
     advertisedScopes: Array<'gmail.read' | 'gmail.send' | 'gmail.modify' | 'gmail.drafts'> = [scope],
+    resultMode: 'json' | 'native' = 'json',
   ) => {
     if (!hasScope(grantedScope, scope)) {
       return;
@@ -358,7 +892,8 @@ export function registerGmailTools(
       try {
         ensureRequiredScope(config, grantedScope, scope);
         const parsed = z.object(inputSchema).parse(args);
-        return okResult(await handler(parsed));
+        const result = await handler(parsed);
+        return resultMode === 'native' ? result as CallToolResult : okResult(result);
       } catch (error) {
         const httpError = error instanceof HttpError
           ? error
@@ -369,6 +904,10 @@ export function registerGmailTools(
       }
     });
   };
+
+  if (hasScope(grantedScope, 'gmail.read')) {
+    registerGmailAttachmentResources(server, client);
+  }
 
   register('gmail_get_profile', 'gmail.read', 'Get the Gmail profile for the authenticated account.', {}, gmailProfileOutput, async () => {
     return client.getProfile();
@@ -396,12 +935,12 @@ export function registerGmailTools(
     return { resultSizeEstimate: list.resultSizeEstimate, messages };
   }, true);
 
-  register('gmail_get_message', 'gmail.read', 'Get one Gmail message by id. Use bodyFormat="sanitized" to return readable body text plus extracted links without Gmail base64 MIME blobs.', {
+  register('gmail_get_message', 'gmail.read', 'Get one Gmail message by id. For compact LLM-safe output, use bodyFormat="sanitized" with includePayloadData=false to return concise metadata, readable body text, and extracted links without the Gmail MIME payload, transport headers, or base64 body blobs. Set includePayloadData=true only when the original Gmail payload is explicitly needed.', {
     id: z.string().min(1),
     format: z.enum(['metadata', 'full', 'minimal', 'raw']).default('metadata').optional(),
     metadataHeaders: z.array(z.string().min(1).max(100)).max(25).optional(),
     bodyFormat: z.enum(['none', 'decoded', 'sanitized']).default('none').optional(),
-    includePayloadData: z.boolean().optional(),
+    includePayloadData: z.boolean().describe('When bodyFormat is decoded or sanitized, false/default omits the top-level Gmail payload for compact output; true includes the original Gmail MIME payload.').optional(),
     maxBodyBytes: z.number().int().min(1).max(MAX_MESSAGE_BODY_BYTES).default(1024 * 1024).optional(),
   }, gmailMessageOutput, async ({ id, format = 'metadata', metadataHeaders, bodyFormat = 'none', includePayloadData, maxBodyBytes = 1024 * 1024 }) => {
     const effectiveFormat = bodyFormat === 'none' ? format : 'full';
@@ -413,12 +952,56 @@ export function registerGmailTools(
     }
 
     const shouldIncludePayloadData = includePayloadData ?? false;
+    const body = buildMessageBody(message, bodyFormat, maxBodyBytes);
+
+    if (!shouldIncludePayloadData) {
+      return {
+        ...compactMessage(message),
+        body,
+      };
+    }
+
     return {
       ...message,
-      ...(shouldIncludePayloadData ? {} : { payload: stripPayloadBodyData(message.payload) }),
-      body: buildMessageBody(message, bodyFormat, maxBodyBytes),
+      body,
     };
   }, true);
+
+  const attachmentInputSchema = {
+    messageId: z.string().min(1),
+    attachmentId: z.string().min(1),
+    filename: z.string().min(1).max(500).optional(),
+    mimeType: z.string().min(1).max(200).optional(),
+    size: z.number().int().min(0).optional(),
+    contentDisposition: z.string().min(1).max(1000).optional(),
+    contentId: z.string().min(1).max(500).optional(),
+    disposition: z.string().min(1).max(100).optional(),
+    outputMode: z.enum(['base64', 'text']).default('base64').describe('base64 returns attachment bytes; text decodes raw bytes only for text-like attachments and does not extract text from PDFs, images, or office documents.').optional(),
+    encoding: z.enum(['base64', 'text']).describe('Deprecated alias for outputMode. Prefer outputMode.').optional(),
+    maxBytes: z.number().int().min(1).max(MAX_ATTACHMENT_BYTES).default(1024 * 1024).optional(),
+  };
+  const attachmentDescription = 'Download one Gmail message attachment by messageId and attachmentId. Recommended agent flow: use gmail_search_messages to find candidate messages, call gmail_get_message(bodyFormat="sanitized", includePayloadData=false) for compact message text plus attachments metadata, then call this tool with the attachmentId. The tool can also resolve filename, mimeType, size, contentDisposition, contentId, and partId from the message MIME tree. It returns base64 bytes by default, includes sha256Full and sha256Returned, reports PNG/JPEG dimensions when detectable from returned bytes, and caps decoded bytes with maxBytes. outputMode="text" decodes raw bytes only for text-like attachments; it does not extract PDF text, render previews, perform OCR, or create workspace files.';
+
+  register('gmail_download_attachment', 'gmail.read', attachmentDescription, attachmentInputSchema, gmailAttachmentOutput, async (input) => {
+    return downloadAttachment(input, client);
+  }, true);
+
+  const readAttachmentInputSchema = {
+    messageId: z.string().min(1),
+    attachmentId: z.string().min(1),
+    filename: z.string().min(1).max(500).optional(),
+    mimeType: z.string().min(1).max(200).optional(),
+    size: z.number().int().min(0).optional(),
+    contentDisposition: z.string().min(1).max(1000).optional(),
+    contentId: z.string().min(1).max(500).optional(),
+    disposition: z.string().min(1).max(100).optional(),
+    mode: z.enum(['auto', 'metadata', 'text', 'native', 'raw']).default('auto').describe('auto/native return model-visible MCP content blocks when supported; metadata returns metadata only; text decodes text-like attachments; raw returns legacy byte JSON in text content for debugging.').optional(),
+    maxBytes: z.number().int().min(1).max(MAX_ATTACHMENT_BYTES).default(DEFAULT_ATTACHMENT_BYTES).optional(),
+  };
+  const readAttachmentDescription = 'Read one Gmail attachment in an LLM-native MCP shape. Use this instead of gmail_download_attachment when an assistant should inspect attachment content. Text-like attachments return TextContent and also mirror bounded decoded text in structuredContent.text for host compatibility, images return ImageContent, audio returns AudioContent, PDFs and unknown binaries return a readable ResourceLink to gmail://messages/{messageId}/attachments/{attachmentId} plus metadata. PDF text extraction, rendering, and OCR are not available in this Worker build.';
+  register('gmail_read_attachment', 'gmail.read', readAttachmentDescription, readAttachmentInputSchema, gmailReadAttachmentOutput, async (input) => {
+    return readAttachment(input, client);
+  }, true, false, true, ['gmail.read'], 'native');
 
   register('gmail_create_draft', 'gmail.drafts', 'Create a Gmail draft.', {
     to: z.array(z.string().email()).min(1),

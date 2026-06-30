@@ -70,7 +70,7 @@ See:
 | `calendar.write` | `calendar.events` or `calendar.events.owned` | calendar create/update/delete tools |
 | `drive.read` | `drive.readonly` or implied by `drive.write` | Drive list/get/download tools |
 | `drive.write` | `drive` | Drive upload/create/move/rename/delete tools |
-| `gmail.read` | `gmail.readonly` or implied by `gmail.modify` | Gmail profile/list/search/get tools |
+| `gmail.read` | `gmail.readonly` or implied by `gmail.modify` | Gmail profile/list/search/get/attachment tools |
 | `gmail.send` | `gmail.send` | Gmail send + reply tools |
 | `gmail.modify` | `gmail.modify` | Gmail label/archive/trash/read-unread tools |
 | `gmail.drafts` | `gmail.compose` | Gmail draft creation tools |
@@ -91,6 +91,14 @@ Keep your Google app in **Testing** mode and start with these scopes:
 - `https://www.googleapis.com/auth/drive` (needed for listing, folder creation, rename/move, upload, download, and delete operations)
 
 Optional advanced scopes for broader read/modify behavior should be added only if you need them.
+
+## Gmail Attachments
+
+Agents should inspect attachments in a short explicit flow. Use `gmail_search_messages` to find candidate messages, call `gmail_get_message` with `bodyFormat="sanitized"` and `includePayloadData=false` for compact readable text plus an `attachments` array, then call `gmail_read_attachment` with the message id and attachment id when an LLM should read or inspect the attachment.
+
+`gmail_read_attachment` returns MCP-native model-visible content blocks where supported: text-like attachments as `TextContent`, PNG/JPEG/WebP/GIF attachments as `ImageContent`, audio attachments as `AudioContent`, and PDF or unknown binary attachments as a `resource_link` plus metadata. For text-like attachments, bounded decoded text is also mirrored in `structuredContent.text` for hosts that emphasize structured output, but the primary model-facing representation remains MCP `TextContent`. Attachment resources use `gmail://messages/{messageId}/attachments/{attachmentId}` and can be read through MCP `resources/read`; text resources return text and binary resources return base64 blobs with MIME type.
+
+`gmail_download_attachment` remains the byte-level/debug tool. It uses Gmail's attachment endpoint rather than raw MIME reconstruction, returns base64 by default, resolves metadata such as `partId`, `filename`, `mimeType`, `size`, `contentDisposition`, and `contentId` from the message MIME tree when possible, includes `sha256Full` and `sha256Returned`, and caps decoded bytes with `maxBytes`. Check `truncated` before treating returned data as a complete file. `outputMode="text"` decodes raw bytes only for text-like attachments; it does not extract PDF text, render previews, perform OCR, or create local workspace files from the remote Worker. The current Worker build also does not extract PDF text, render PDF page previews, or perform OCR in `gmail_read_attachment`; PDFs are exposed deliberately as MCP resources for hosts that can fetch or render them.
 
 ## Local development
 

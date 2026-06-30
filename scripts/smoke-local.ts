@@ -26,7 +26,7 @@ async function main(): Promise<void> {
   const root = await fetchText('/');
   checks.push({
     name: 'GET /',
-    ok: root.response.ok && root.text.includes('gsuite-mcp-gateway lets a user connect their Google Calendar, Gmail, and Google Drive'),
+    ok: root.response.ok && root.text.includes('self-hosted Cloudflare Worker MCP gateway for Google Calendar, Gmail, and Google Drive'),
     details: `status=${root.response.status}`,
   });
 

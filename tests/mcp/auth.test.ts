@@ -7,7 +7,7 @@ import { createGatewayMcpServer } from '../../src/mcp/server';
 import { parseConfig } from '../../src/config';
 import { createTestEnv } from '../helpers/env';
 
-async function completeFlow(scope = 'calendar.write gmail.send offline_access') {
+async function completeFlow(scope = 'calendar.write gmail.send offline_access', extraGoogleRoutes: Record<string, Response | ((request: Request) => Response | Promise<Response>)> = {}) {
   const verifier = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~a';
   const challenge = await createS256CodeChallenge(verifier);
   const googleScopesByRequestedScope: Record<string, string> = {
@@ -38,6 +38,7 @@ async function completeFlow(scope = 'calendar.write gmail.send offline_access') 
       sub: 'google-user-123',
       email: 'me@example.com',
     }),
+    ...extraGoogleRoutes,
   });
 
   const ctx = createWorkerTestContext({ fetch: googleMock.fetch });
@@ -177,6 +178,36 @@ async function listToolNames(ctx: ReturnType<typeof createWorkerTestContext>, to
   return (json.result?.tools ?? []).map((tool) => tool.name);
 }
 
+async function callMcpTool(ctx: ReturnType<typeof createWorkerTestContext>, token: string, name: string, args: Record<string, unknown>) {
+  const response = await ctx.callWorker('/mcp', {
+    method: 'POST',
+    headers: {
+      accept: 'application/json, text/event-stream',
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name,
+        arguments: args,
+      },
+    }),
+  });
+  const json = await response.json() as { result?: { content?: Array<Record<string, unknown>>; structuredContent?: Record<string, unknown> } };
+  return { response, json };
+}
+
+function encodeGmailBytesData(value: Uint8Array): string {
+  return Buffer.from(value)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
 describe('mcp auth and tool registration', () => {
   it('accepts lowercase bearer authorization scheme on /mcp', async () => {
     const flow = await completeFlow();
@@ -205,6 +236,9 @@ describe('mcp auth and tool registration', () => {
     expect(toolNames).toContain('gmail_send_email');
     expect(toolNames).not.toContain('gmail_reply_to_message');
     expect(toolNames).not.toContain('gmail_get_profile');
+    expect(toolNames).not.toContain('gmail_get_attachment');
+    expect(toolNames).not.toContain('gmail_download_attachment');
+    expect(toolNames).not.toContain('gmail_read_attachment');
     expect(toolNames).not.toContain('drive_list_files');
   });
 
@@ -217,9 +251,132 @@ describe('mcp auth and tool registration', () => {
       'drive_list_files',
       'drive_update_file',
       'gmail_get_profile',
+      'gmail_download_attachment',
+      'gmail_read_attachment',
       'gmail_modify_message_labels',
       'gmail_create_draft',
     ]));
+    expect(toolNames).not.toContain('gmail_get_attachment');
+  });
+
+  it('returns Gmail image attachments as MCP image content through /mcp tools/call', async () => {
+    const pngBytes = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d,
+      0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x08,
+      0x00, 0x00, 0x00, 0x09,
+      0x08, 0x02, 0x00, 0x00, 0x00,
+    ]);
+    const flow = await completeFlow('gmail.read offline_access', {
+      'https://gmail.googleapis.com/gmail/v1/users/me/messages/msg-mcp-image/attachments/att-mcp-image': jsonResponse({
+        data: encodeGmailBytesData(pngBytes),
+        size: pngBytes.byteLength,
+      }),
+    });
+
+    const { response, json } = await callMcpTool(flow.ctx, flow.token, 'gmail_read_attachment', {
+      messageId: 'msg-mcp-image',
+      attachmentId: 'att-mcp-image',
+      filename: 'mcp-image.png',
+      mimeType: 'image/png',
+      size: pngBytes.byteLength,
+    });
+
+    expect(response.status).toBe(200);
+    expect(json.result?.content).toEqual([
+      expect.objectContaining({
+        type: 'image',
+        mimeType: 'image/png',
+        data: Buffer.from(pngBytes).toString('base64'),
+      }),
+    ]);
+    expect(json.result?.structuredContent).toMatchObject({
+      filename: 'mcp-image.png',
+      mimeType: 'image/png',
+      representation: 'image',
+      resourceUri: 'gmail://messages/msg-mcp-image/attachments/att-mcp-image',
+      width: 8,
+      height: 9,
+      truncated: false,
+    });
+    expect(json.result?.structuredContent?.data).toBeUndefined();
+  });
+
+  it('returns Gmail text attachments as MCP text content through /mcp tools/call in auto and text modes', async () => {
+    const calendarText = 'BEGIN:VCALENDAR\nVERSION:2.0\nSUMMARY:MCP text test\nEND:VCALENDAR';
+    const flow = await completeFlow('gmail.read offline_access', {
+      'https://gmail.googleapis.com/gmail/v1/users/me/messages/msg-mcp-text/attachments/att-mcp-text': jsonResponse({
+        data: encodeGmailBytesData(Buffer.from(calendarText, 'utf8')),
+        size: Buffer.byteLength(calendarText),
+      }),
+    });
+
+    for (const mode of ['auto', 'text']) {
+      const { response, json } = await callMcpTool(flow.ctx, flow.token, 'gmail_read_attachment', {
+        messageId: 'msg-mcp-text',
+        attachmentId: 'att-mcp-text',
+        filename: 'invite.ics',
+        mimeType: 'text/calendar',
+        size: Buffer.byteLength(calendarText),
+        mode,
+      });
+
+      expect(response.status).toBe(200);
+      expect(json.result?.content).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining('BEGIN:VCALENDAR'),
+        }),
+      ]));
+      expect(json.result?.structuredContent).toMatchObject({
+        filename: 'invite.ics',
+        mimeType: 'text/calendar',
+        representation: 'text',
+        text: expect.stringContaining('BEGIN:VCALENDAR'),
+        bytesReturned: Buffer.byteLength(calendarText),
+        bytesTotal: Buffer.byteLength(calendarText),
+        truncated: false,
+      });
+      expect(json.result?.structuredContent?.data).toBeUndefined();
+    }
+  });
+
+  it('returns Gmail PDFs as resource links through /mcp tools/call without extraction', async () => {
+    const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]);
+    const flow = await completeFlow('gmail.read offline_access', {
+      'https://gmail.googleapis.com/gmail/v1/users/me/messages/msg-mcp-pdf/attachments/att-mcp-pdf': jsonResponse({
+        data: encodeGmailBytesData(pdfBytes),
+        size: pdfBytes.byteLength,
+      }),
+    });
+
+    const { response, json } = await callMcpTool(flow.ctx, flow.token, 'gmail_read_attachment', {
+      messageId: 'msg-mcp-pdf',
+      attachmentId: 'att-mcp-pdf',
+      filename: 'document.pdf',
+      mimeType: 'application/pdf',
+      size: pdfBytes.byteLength,
+    });
+
+    expect(response.status).toBe(200);
+    expect(json.result?.content).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'resource_link',
+        uri: 'gmail://messages/msg-mcp-pdf/attachments/att-mcp-pdf',
+        name: 'document.pdf',
+        mimeType: 'application/pdf',
+      }),
+    ]));
+    expect(json.result?.structuredContent).toMatchObject({
+      filename: 'document.pdf',
+      mimeType: 'application/pdf',
+      representation: 'resource_link',
+      textExtracted: false,
+      renderedPages: [],
+    });
+    expect(json.result?.structuredContent?.text).toBeUndefined();
+    expect(json.result?.structuredContent?.data).toBeUndefined();
   });
 
   it('does not silently broaden an existing access token after the stored grant widens', async () => {

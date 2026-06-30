@@ -12,6 +12,7 @@ export interface GoogleGmailClient {
   listLabels(): Promise<unknown>;
   listMessages(params: Record<string, string>): Promise<unknown>;
   getMessage(id: string, params: Record<string, string | string[]>): Promise<unknown>;
+  getAttachment(messageId: string, attachmentId: string): Promise<unknown>;
   createDraft(raw: string, threadId?: string): Promise<unknown>;
   sendMessage(raw: string, threadId?: string): Promise<unknown>;
   modifyMessageLabels(id: string, body: Record<string, unknown>): Promise<unknown>;
@@ -54,6 +55,12 @@ export function createGoogleGmailClient(accessToken: string, fetchImpl: typeof f
         if (value) url.searchParams.append(key, value);
       }
       const response = await fetchImpl(url.toString(), {
+        headers: buildHeaders(accessToken),
+      });
+      return expectGoogleJson(response);
+    },
+    async getAttachment(messageId, attachmentId) {
+      const response = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`, {
         headers: buildHeaders(accessToken),
       });
       return expectGoogleJson(response);
